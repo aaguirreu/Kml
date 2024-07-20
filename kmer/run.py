@@ -3,7 +3,7 @@ import os
 import csv
 from Bio import SeqIO
 import itertools
-from kmer import log_step, save_time_log, log_results, calculate_tfidf, step_log, time_log, __date__
+from kmer import log_step, save_time_log, log_results, calculate_tfidf, time_log, __date__
 
 def vector(sequence, k):
     kmer_counts = {}
@@ -25,7 +25,7 @@ def kmers(args, files, k_range):
     best_k = None
 
     for k in k_range:
-        kmer_list = all_posible_kmers(k)
+        kmer_set = set()
         all_sequences = []
         genome_ids = []
 
@@ -43,9 +43,11 @@ def kmers(args, files, k_range):
                 result_py = vector(concatenated_sequence, k)
                 elapsed_time_vector = time.time() - start_time_vector
 
+
                 time_log.append([genome_id, k, elapsed_time_vector])
                 all_sequences.append(concatenated_sequence)
                 genome_ids.append(genome_id)
+                kmer_set.update(result_py.keys())
 
                 if elapsed_time_vector < best_performance_time:
                     best_performance_time = elapsed_time_vector
@@ -60,9 +62,10 @@ def kmers(args, files, k_range):
             file_exists = os.path.isfile(output_filepath)
             with open(output_filepath, 'a') as output_file:
                 writer = csv.writer(output_file, delimiter='\t')
+                sorted_kmers = sorted(kmer_set)
                 if not file_exists:
-                    writer.writerow(['ID_genome'] + kmer_list)
-                writer.writerow([genome_id] + [result_py.get(kmer, 0) for kmer in kmer_list])
+                    writer.writerow(['ID_genome'] + sorted_kmers)
+                writer.writerow([genome_id] + [result_py.get(kmer, 0) for kmer in sorted_kmers])
 
             # Vectorization
             # tfidf_matrix = calculate_tfidf(result_py, k)

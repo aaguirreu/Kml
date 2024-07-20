@@ -9,6 +9,6 @@ step_log = []
 
 #from sec2vec_module import sec2vec
 from .vectorize import calculate_tfidf
-from .logging import log_step, save_time_log, log_results
+from .kmer_logging import log_step, save_time_log, log_results
 from .compare import compare_kmers
-from .kmer import kmers
+from .run import kmers
