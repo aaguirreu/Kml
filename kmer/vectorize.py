@@ -3,6 +3,7 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.metrics import f1_score, matthews_corrcoef, roc_auc_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
+from kmer import log_step
 import pandas as pd
 import numpy as np
 
@@ -47,7 +48,7 @@ def vectorization(tsv_file):
     if len(df) > 1 and all(original_labels.value_counts() > 1):
         train_df, test_df = train_test_split(df, test_size=0.2, stratify=original_labels)
     else:
-        print("Not enough samples to split. Using entire dataset for both training and testing.")
+        log_step("Not enough samples to split. Using entire dataset for both training and testing.")
         train_df = test_df = df
 
     # Separate features and labels
@@ -66,4 +67,4 @@ def vectorization(tsv_file):
     y_proba = trained_model.predict_proba(X_test)
     f1, mcc, auc = evaluate_model(y_test, y_pred, y_proba)
     
-    print(f"F1 Score: {f1}, MCC: {mcc}, AUC: {auc}")
+    log_step(f"F1 Score: {f1}, MCC: {mcc}, AUC: {auc}")

@@ -1,2 +1,5 @@
 biopython
 scikit-learn
+numpy
+pandas
+setuptools
