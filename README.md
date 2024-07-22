@@ -4,12 +4,28 @@ En este avance se comparan los algoritmos k-mer escritos en python y c++. Aún s
 
 ## Installation
 
+### Conda enviroment 
+
 ```
-pip install -r requirements.txt
+conda create --name Kmer python
+conda activate Kmer
+conda install --file requirements.txt
 ```
 
 ## Usage
 
 ```
-python3 -m kmer.main -k 2-10 -d ../Genomes/ -o results
+python3 -m kmer.main -k 2-10 -d <path-to-sequences-folder> -o <output-path>
+```
+
+or
+
+```
+python3 -m kmer.main -k 2-10 -f <path-to-sequence-file> -o <output-path>
+```
+
+### Example of usage
+
+```
+python3 -m kmer.main -k 2-10 -d ./Genomes/ -o results
 ```

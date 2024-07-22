@@ -1,7 +1,7 @@
 import time
 import os
 import argparse
-from kmer import log_step, compare_kmers, kmers
+from kmer import log_step, compare_kmers, kmers, __date__
 
 def parse_k_range(k_str):
     if '-' in k_str:
@@ -55,12 +55,19 @@ def main():
         return
 
     start_total = time.time()
-    try:
-        #compare_kmers(args, files, k_range)
-        kmers(args, files, k_range)
+    # try:
+        # compare_kmers(args, files, k_range)
+    kmers(args, files, k_range)
 
-    except Exception as e:
-        log_step(f"Error during comparison: {e}")
+    # except Exception as e:
+    #     log_step(f"Error during kmer: {e}")
+    #     log_step("Exiting program")
+
+        # Delete the files created in output directory in this run
+        # for filename in os.listdir(args.output_dir):
+        #     if filename.startswith(__date__):
+        #         os.remove(os.path.join(args.output_dir, filename))
+
     end_total = time.time()
 
     log_step(f"Total time taken: {end_total - start_total} seconds\n")

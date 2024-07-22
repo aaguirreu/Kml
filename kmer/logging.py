@@ -21,8 +21,8 @@ def save_time_log(filepath):
         writer.writerows(time_log)
     log_step(f"Time log saved to {filepath}")
 
-def log_results(files, best_performance_file, best_k, k_range):
-    log_output_filepath = os.path.join('logs', f'{__date__}.log')
+def log_results(output, files, best_k, k_range):
+    log_output_filepath = os.path.join(output, f'{__date__}.log')
     with open(log_output_filepath, 'w') as log_file:
         log_file.write(f"""#####################################
 # Title: Kmer                       #
@@ -38,7 +38,7 @@ def log_results(files, best_performance_file, best_k, k_range):
 - Frequency:
 
 """)
-        log_file.write(f"The best performance was achieved with file {best_performance_file} using {best_k}-mer analysis.\n\n")
+        #log_file.write(f"The best performance was achieved with file {best_performance_file} using {best_k}-mer analysis.\n\n")
         for filepath in files:
             log_file.write(f"file: {filepath}\n")
             log_file.write(f"size: {os.path.getsize(filepath)} bytes\n")
