@@ -1,7 +1,3 @@
-Here is a draft of the README.md file based on the provided documents and project context:
-
----
-
 # DNA Sequence Vectorization for Bacterial Species and Subspecies Delimitation
 
 This repository contains the source code and supplementary material for the study titled "DNA Sequence Vectorization for Bacterial Species and Subspecies Delimitation Using Machine Learning Classification Methods."
@@ -36,10 +32,16 @@ This study aims to use alignment-free sequence methods to delimit bacterial spec
 
 To run this project locally, please follow these steps:
 
+### Clone repository
+
+```
+git clone https://github.com/aaguirreu/Kmer.git
+```
+
 ### Conda enviroment 
 
 ```
-conda create --name Kmer python
+conda create --name Kmer python=3.12
 conda activate Kmer
 conda install --file requirements.txt
 ```
@@ -104,7 +106,3 @@ The project is implemented in Python and leverages several key libraries:
 ## License
 
 This project is licensed under the MIT License. See the LICENSE file for details.
-
----
-
-This README.md file provides a comprehensive overview of the project, including its background, installation instructions, usage, methods, results, and contributors. Adjustments can be made based on additional details or specific preferences.
