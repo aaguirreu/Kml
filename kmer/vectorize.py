@@ -25,7 +25,6 @@ def extract_taxonomy(label):
             level, value = part.split('__') if '__' in part else (part, "")
             taxonomy[level] = value
     else:
-        print(parts)
         taxonomy['s'] = ' '.join(parts[:2])
     return taxonomy
 
