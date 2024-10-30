@@ -1,7 +1,7 @@
 import time
 import os
 import argparse
-from kmer import log_step, compare_kmers, kmers, __date__
+from kmer import log_step, kmers, __date__
 
 def parse_k_range(k_str):
     if '-' in k_str:

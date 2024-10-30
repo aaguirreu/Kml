@@ -7,7 +7,7 @@ class TestVectorization(unittest.TestCase):
         sequence = "ATCGATCGA"
         k = 3
         expected = {'ATC': 2, 'TCG': 2, 'CGA': 2}
-        result = vector(sequence, k)
+        result = parallel_kmer_counter(sequence, k)
         self.assertEqual(result, expected)
 
 if __name__ == '__main__':

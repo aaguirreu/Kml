@@ -2,21 +2,55 @@ import time
 import os
 import csv
 from Bio import SeqIO
+from Bio.Seq import Seq
 import itertools
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from kmer import log_step, save_time_log, log_results, calculate_tfidf, vectorization, time_log, __date__
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from kmer import log_step, save_time_log, log_results, vectorize_kmers, classification, time_log, __date__
 
 def kmer_counter(sequence, k):
     kmer_counts = {}
     for i in range(len(sequence) - k + 1):
         kmer = sequence[i:i + k]
-        if kmer in kmer_counts:
-            kmer_counts[kmer] += 1
+        rev_kmer = str(Seq(kmer).reverse_complement())
+        min_kmer = min(kmer, rev_kmer)
+        if min_kmer in kmer_counts:
+            kmer_counts[min_kmer] += 1
         else:
-            kmer_counts[kmer] = 1
+            kmer_counts[min_kmer] = 1
     return kmer_counts
+
+def determine_num_chunks(sequence_length, max_chunks=None):
+    num_cores = os.cpu_count() or 1
+    estimated_chunks = min(num_cores, sequence_length // 1000)
+    if max_chunks is not None:
+        estimated_chunks = min(estimated_chunks, max_chunks)
+    return max(1, estimated_chunks)
+
+def parallel_kmer_counter(sequence, k):
+    num_chunks = determine_num_chunks(len(sequence))
+    chunk_size = len(sequence) // num_chunks
+    chunks = [sequence[i:i + chunk_size + k - 1] for i in range(0, len(sequence), chunk_size)]
+    
+    kmer_counts = {}
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(kmer_counter, chunk, k) for chunk in chunks]
+        
+        for future in as_completed(futures):
+            result = future.result()
+            for kmer, count in result.items():
+                if kmer in kmer_counts:
+                    kmer_counts[kmer] += count
+                else:
+                    kmer_counts[kmer] = count
+                    
+    return kmer_counts
+
+def clean_sequence(sequence):
+    valid_bases = set("ACGT")  # Conjunto de bases válidas
+    return ''.join(base for base in sequence if base in valid_bases)
 
 def evaluate_kmer_vectors(vectors):
     # Example metric: Mean cosine similarity between all pairs of vectors
@@ -30,73 +64,64 @@ def kmers(args, files, k_range):
 
     for k in k_range:
         kmer_set = set()
-        all_sequences = []
-        genome_ids = []
-        labels = []
+        data = []
 
         log_step(f"Processing {k}-mer")
-
         for filepath in files:
-            concatenated_sequence = ""
-            genome_id = None
-            label = os.path.splitext(os.path.basename(filepath))[0]
-
             for record in SeqIO.parse(filepath, 'fasta'):
-                concatenated_sequence += str(record.seq)
-                if genome_id is None:
-                    genome_id = record.id
-            try:
-                start_time_vector = time.time()
-                kmer_counts = kmer_counter(concatenated_sequence, k)
-                elapsed_time_vector = time.time() - start_time_vector
+                label = record.description.replace(record.id, "").strip()
+                sequence = str(record.seq)
+                try:
+                    cleaned_sequence = clean_sequence(sequence)
+                    # if len(cleaned_sequence) < len(sequence):
+                    #     log_step("Found invalid characters in sequence. Characters differente from ATCG were deleted")
+                
+                    start_time_vector = time.time()
+                    kmer_counts = parallel_kmer_counter(cleaned_sequence, k)
+                    elapsed_time_vector = time.time() - start_time_vector
+                    time_log.append([record.id, k, elapsed_time_vector])
+                    data.append({
+                        'ID_genome': record.id,
+                        'label': label,
+                        **kmer_counts
+                    })
+                    kmer_set.update(kmer_counts.keys())
 
-                time_log.append([genome_id, k, elapsed_time_vector])
-                all_sequences.append(concatenated_sequence)
-                genome_ids.append(genome_id)
-                labels.append(label)
-                kmer_set.update(kmer_counts.keys())
+                except Exception as e:
+                    log_step(f"Error processing {k}-mer for file {filepath}: {e}")
+                    save_time_log(os.path.join(args.output_dir, f'{__date__}.tsv'))
+                    log_results(args.output_dir, files, best_k, k_range)
+                    return
+        
+        df = pd.DataFrame(data)
+        df.fillna(0, inplace=True)
+        sorted_cols = sorted(df.columns.difference(['ID_genome', 'label']))
+        new_order = ['ID_genome', 'label'] + sorted_cols
+        df = df[new_order]
 
-            except Exception as e:
-                log_step(f"Error processing {k}-mer for file {filepath}: {e}")
-                save_time_log(os.path.join(args.output_dir, f'{__date__}.tsv'))
-                log_results(args.output_dir, files, best_k, k_range)
-
-            output_filepath = os.path.join(args.output_dir, f'{__date__}_{k}-mer.tsv')
-            file_exists = os.path.isfile(output_filepath)
-            with open(output_filepath, 'a') as output_file:
-                writer = csv.writer(output_file, delimiter='\t')
-                sorted_kmers = sorted(kmer_set)
-                if not file_exists:
-                    writer.writerow(['ID_genome', 'label'] + sorted_kmers)
-                writer.writerow([genome_id, label] + [kmer_counts.get(kmer, 0) for kmer in sorted_kmers])
-
+        output_filepath = os.path.join(args.output_dir, f'{__date__}_{k}-mer.tsv')
+        file_exists = os.path.isfile(output_filepath)
+        df.to_csv(output_filepath, sep='\t', index=False)
+        
         # Vectorization
         try:
-            tfidf_matrix = calculate_tfidf(all_sequences, k)
-
-            # Evaluate the vectors for the current k
-            performance_metric = evaluate_kmer_vectors(tfidf_matrix)
-            performance_metrics.append((k, performance_metric))
-            if performance_metric > best_performance_metric:
-                best_performance_metric = performance_metric
-                best_k = k
+            vector_df = vectorize_kmers(df)
 
             vector_output_filepath = os.path.join(args.output_dir, f'{__date__}_{k}-vectors.tsv')
             file_exists = os.path.isfile(vector_output_filepath)
-            with open(vector_output_filepath, 'a') as output_file:
-                writer = csv.writer(output_file, delimiter='\t')
-                if not file_exists:
-                    writer.writerow(['ID_genome', 'label'] + sorted_kmers)
-                for i, genome_id in enumerate(genome_ids):
-                    tfidf_vector = tfidf_matrix[i].toarray().flatten()
-                    writer.writerow([genome_id, labels[i]] +  tfidf_vector.tolist())
+            vector_df.to_csv(vector_output_filepath, sep='\t', index=False)
 
         except Exception as e:
-            log_step(f"Error calculating TF-IDF for k={k}: {e}")
+            log_step(f"Error in vectorization for k={k}: {e}")
             save_time_log(os.path.join(args.output_dir, f'{__date__}.tsv'))
-            log_results(args.output_dir, files, best_k, k_range)
+            log_results(args.output_dir, files, k, k_range)
+            return
 
         log_step(f"Completed processing for k={k}, results saved to {output_filepath}")
+            # Training and evaluation using the best k
+        log_step(f"Training and evaluating model using k={k}")
+        log_step(f"Using vectors from {vector_output_filepath}")
+        classification(vector_df)
 
     log_results(args.output_dir, files, best_k, k_range)
     save_time_log(os.path.join(args.output_dir, f'{__date__}.tsv'))
@@ -107,9 +132,3 @@ def kmers(args, files, k_range):
         writer = csv.writer(metrics_file, delimiter='\t')
         writer.writerow(['k', 'performance_metric'])
         writer.writerows(performance_metrics)
-
-    # Training and evaluation using the best k
-    log_step(f"Training and evaluating model using best k={best_k}")
-    best_k_file = os.path.join(args.output_dir, f'{__date__}_{best_k}-vectors.tsv')
-    log_step(f"Using vectors from {best_k_file}")
-    vectorization(best_k_file)
