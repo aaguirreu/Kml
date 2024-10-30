@@ -7,22 +7,25 @@ import pandas as pd
 import numpy as np
 
 def extract_taxonomy(label):
-    # Separar la cadena en partes
     if '[' in label:
-        label = label.split('[')[0]  # Mantener solo la parte antes del '['
+        label = label.split('[')[0] 
     if ';' in label:
         parts = label.split(';')
     elif ',' in label:
         label = label.split(',')[0]
         parts = label.split(' ')
-    # Crear un diccionario para almacenar los niveles taxonómicos
+        if ':' in label:
+            label = label.split(':')[1].strip()
+            parts = label.split(' ')
+    else:
+        parts = label.split(' ')
     taxonomy = {}
     if '__' in label:
         for part in parts:
-            # Separar el nivel del valor
             level, value = part.split('__') if '__' in part else (part, "")
             taxonomy[level] = value
     else:
+        print(parts)
         taxonomy['s'] = ' '.join(parts[:2])
     return taxonomy
 
