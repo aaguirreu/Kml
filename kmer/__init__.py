@@ -9,5 +9,6 @@ step_log = []
 
 #from sec2vec_module import sec2vec
 from .logging import log_step, save_time_log, log_results
-from .vectorize import vectorize_kmers, classification
-from .run import kmers
+from .mlize import run_models, classification
+from .vectorize import evaluate_all_vectorizations
+from .run import kmers, extract_taxonomy

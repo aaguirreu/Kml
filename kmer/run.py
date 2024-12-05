@@ -1,6 +1,7 @@
 import time
 import os
 import csv
+import psutil
 from Bio import SeqIO
 from Bio.Seq import Seq
 import itertools
@@ -8,7 +9,7 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from kmer import log_step, save_time_log, log_results, vectorize_kmers, classification, time_log, __date__
+from kmer import log_step, save_time_log, log_results, evaluate_all_vectorizations, classification, time_log, __date__
 
 def kmer_counter(sequence, k):
     kmer_counts = {}
@@ -49,13 +50,40 @@ def parallel_kmer_counter(sequence, k):
     return kmer_counts
 
 def clean_sequence(sequence):
-    valid_bases = set("ACGT")  # Conjunto de bases válidas
+    valid_bases = set("ACGT")
     return ''.join(base for base in sequence if base in valid_bases)
 
 def evaluate_kmer_vectors(vectors):
-    # Example metric: Mean cosine similarity between all pairs of vectors
     similarity_matrix = cosine_similarity(vectors)
     return similarity_matrix.mean()
+
+def log_memory_usage():
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    # Log de la memoria utilizada en MB
+    log_step(f"Uso de memoria: {memory_info.rss / (1024 ** 2):.2f} MB")
+
+def extract_taxonomy(label):
+    if '[' in label:
+        label = label.split('[')[0] 
+    if ';' in label:
+        parts = label.split(';')
+    elif ',' in label:
+        label = label.split(',')[0]
+        parts = label.split(' ')
+        if ':' in label:
+            label = label.split(':')[1].strip()
+            parts = label.split(' ')
+    else:
+        parts = label.split(' ')
+    taxonomy = {}
+    if '__' in label:
+        for part in parts:
+            level, value = part.split('__') if '__' in part else (part, "")
+            taxonomy[level] = value
+    else:
+        taxonomy['s'] = ' '.join(parts[:2])
+    return taxonomy
 
 def kmers(args, files, k_range):
     best_performance_metric = -float('inf')  # Start with the worst possible metric
@@ -92,24 +120,37 @@ def kmers(args, files, k_range):
                     save_time_log(os.path.join(args.output_dir, f'{__date__}.tsv'))
                     log_results(args.output_dir, files, best_k, k_range)
                     return
-        
+
+            log_step(f"reading {filepath}")
+            log_memory_usage()
+
+        log_step(f"Creating df from data")
         df = pd.DataFrame(data)
+        log_memory_usage()
         df.fillna(0, inplace=True)
         sorted_cols = sorted(df.columns.difference(['ID_genome', 'label']))
         new_order = ['ID_genome', 'label'] + sorted_cols
+        log_step(f"Ordering df k-mers A-Z")
         df = df[new_order]
+        log_memory_usage()
 
         output_filepath = os.path.join(args.output_dir, f'{__date__}_{k}-mer.tsv')
         file_exists = os.path.isfile(output_filepath)
         df.to_csv(output_filepath, sep='\t', index=False)
         
-        # Vectorization
+        # Vectorization and Machine Learning
         try:
-            vector_df = vectorize_kmers(df)
+            taxonomy_df = df['label'].apply(extract_taxonomy).apply(pd.Series)
+            df['label'] = taxonomy_df['s']
+            df = df.rename(columns={'label': 'specie'})
+            del taxonomy_df
+            log_memory_usage()
+            results = evaluate_all_vectorizations(df)
 
-            vector_output_filepath = os.path.join(args.output_dir, f'{__date__}_{k}-vectors.tsv')
-            file_exists = os.path.isfile(vector_output_filepath)
-            vector_df.to_csv(vector_output_filepath, sep='\t', index=False)
+            # save vectors in .tsv?
+            # vector_output_filepath = os.path.join(args.output_dir, f'{__date__}_{k}-vectors.tsv')
+            # file_exists = os.path.isfile(vector_output_filepath)
+            # vector_df.to_csv(vector_output_filepath, sep='\t', index=False)
 
         except Exception as e:
             log_step(f"Error in vectorization for k={k}: {e}")
@@ -118,10 +159,10 @@ def kmers(args, files, k_range):
             return
 
         log_step(f"Completed processing for k={k}, results saved to {output_filepath}")
-            # Training and evaluation using the best k
-        log_step(f"Training and evaluating model using k={k}")
-        log_step(f"Using vectors from {vector_output_filepath}")
-        classification(vector_df)
+        # Training and evaluation using the best k
+        # log_step(f"Training and evaluating model using k={k}")
+        # log_step(f"Using vectors from {vector_output_filepath}")
+        # classification(vector_df)
 
     log_results(args.output_dir, files, best_k, k_range)
     save_time_log(os.path.join(args.output_dir, f'{__date__}.tsv'))
