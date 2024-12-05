@@ -1,115 +1,141 @@
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
-from sklearn.metrics import f1_score, matthews_corrcoef, roc_auc_score
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from kmer import log_step
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.feature_extraction.text import TfidfTransformer
+from kmer import log_step, run_models
+import hashlib
 import pandas as pd
 import numpy as np
+import psutil
 
-def extract_taxonomy(label):
-    if '[' in label:
-        label = label.split('[')[0] 
-    if ';' in label:
-        parts = label.split(';')
-    elif ',' in label:
-        label = label.split(',')[0]
-        parts = label.split(' ')
-        if ':' in label:
-            label = label.split(':')[1].strip()
-            parts = label.split(' ')
-    else:
-        parts = label.split(' ')
-    taxonomy = {}
-    if '__' in label:
-        for part in parts:
-            level, value = part.split('__') if '__' in part else (part, "")
-            taxonomy[level] = value
-    else:
-        taxonomy['s'] = ' '.join(parts[:2])
-    return taxonomy
+def vectorize_kmer_frequency(df):
+    return df
 
-def vectorize_kmers(kmer_counts_df):
+def vectorize_tfidf(df):
+    """
+    Perform a tf-df vectorization on k-mer columns in a DataFrame.
+    
+    Parameters:
+        df (pd.DataFrame): The input DataFrame containing k-mers.
+    
+    Returns:
+        pd.DataFrame: A DataFrame with the tf-idf k-mer values.
+    """
+    specie_column = df["specie"]
+    kmer_data = df.drop(columns=["ID_genome", "specie"])
+    transformer = TfidfTransformer()
+    tfidf_matrix = transformer.fit_transform(kmer_data.astype(float))
+    vectors_df = pd.DataFrame(tfidf_matrix.toarray(), columns=kmer_data.columns, index=df["ID_genome"])
+    vectors_df = vectors_df.reset_index().rename(columns={"index": "ID_genome"})
+    vectors_df.insert(1, 'specie', specie_column)
+    return vectors_df
+
+def vectorize_relative_frequency(df):
+    """
+    Perform a relative frequency vectorization on k-mer columns in a DataFrame.
+    
+    Parameters:
+        df (pd.DataFrame): The input DataFrame containing k-mers.
+    
+    Returns:
+        pd.DataFrame: A DataFrame with the relative frequency k-mer values.
+    """
     vector_list = []
-
-    for index, row in kmer_counts_df.iterrows():
-        total_kmers = row[2:].sum() 
+    for index, row in df.iterrows():
+        total_kmers = row[2:].sum()
         if total_kmers > 0:
             normalized = row[2:] / total_kmers 
         else:
-            normalized = row[2:] 
-        
+            normalized = row[2:]
         vector_list.append(normalized)
+    vectors_df = pd.DataFrame(vector_list, columns=df.columns[2:])
+    vectors_df.insert(0, 'ID_genome', df['ID_genome'])
+    vectors_df.insert(1, 'specie', df['specie'])
+    vector_list
+    return vectors_df
 
-    vector_df = pd.DataFrame(vector_list, columns=kmer_counts_df.columns[2:])
+def vectorize_kmer_hashing(df):
+    """
+    Perform k-mer hashing vectorization on k-mer columns in a DataFrame.
     
-    vector_df.insert(0, 'ID_genome', kmer_counts_df['ID_genome'])
-    vector_df.insert(1, 'label', kmer_counts_df['label'])
+    Parameters:
+        df (pd.DataFrame): The input DataFrame containing k-mers.
     
-    return vector_df
+    Returns:
+        pd.DataFrame: A DataFrame with k-mer hashing k-mer values.
+    """
+    hashed_vectors = []
+    num_buckets = 10
+    for _, row in df.iterrows():
+        vector = [0] * num_buckets
+        for kmer, count in row[2:].items():
+            bucket_index = int(hashlib.sha256(kmer.encode()).hexdigest(), 16) % num_buckets
+            vector[bucket_index] += count 
+        hashed_vectors.append(vector)
+    vectors_df = pd.DataFrame(hashed_vectors, columns=[f'bucket_{i}' for i in range(num_buckets)])
+    vectors_df.insert(0, 'ID_genome', df['ID_genome'])
+    vectors_df.insert(1, 'specie', df['specie'])
+    return vectors_df
 
-def normalize_data(data):
-    scaler = StandardScaler()
-    return scaler.fit_transform(data)
+def vectorize_onehot(df):
+    """
+    Perform one-hot encoding on k-mer columns in a DataFrame.
+    
+    Parameters:
+        df (pd.DataFrame): The input DataFrame containing k-mers.
+    
+    Returns:
+        pd.DataFrame: A DataFrame with one-hot encoded k-mer values.
+    """
 
-def train_model(X_train, y_train, model):
-    model.fit(X_train, y_train)
-    return model
+    # Separate ID_genome and label columns
+    id_label_columns = ['ID_genome', 'label']
+    if not all(col in df.columns for col in id_label_columns):
+        raise ValueError("Both 'ID_genome' and 'label' columns must be present.")
+    
+    # Identify k-mer columns (all columns after 'label')
+    kmer_columns = df.columns[2:]  # Assumes 'ID_genome' and 'label' are the first two columns
+    df = df.head()
+    # Perform one-hot encoding
+    one_hot_encoded_kmers = pd.get_dummies(df[kmer_columns].astype(str), prefix=kmer_columns)
+    
+    # Concatenate ID_genome, label, and the one-hot encoded k-mers
+    result_df = pd.concat([df[id_label_columns], one_hot_encoded_kmers], axis=1)
+    
+    return result_df
 
-def evaluate_model(y_true, y_pred, y_proba):
-    f1 = f1_score(y_true, y_pred, average='weighted')
-    mcc = matthews_corrcoef(y_true, y_pred)
-    auc = roc_auc_score(y_true, y_proba, multi_class='ovr')
-    return f1, mcc, auc
+def log_memory_usage():
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    # Log de la memoria utilizada en MB
+    log_step(f"Uso de memoria: {memory_info.rss / (1024 ** 2):.2f} MB")
 
-def classification(vector_df):
-    try:
-        taxonomy_df = vector_df['label'].apply(extract_taxonomy).apply(pd.Series)
-        taxonomy_df
-        vector_df['label'] = taxonomy_df['s']
-        vector_df = vector_df.rename(columns={'label': 'specie'})
-        del taxonomy_df
-        
-        single_value_classes = vector_df['specie'].value_counts()[vector_df['specie'].value_counts() < 2].index.tolist()    
-        for clase in single_value_classes:
-            row_to_duplicate = vector_df[vector_df['specie'] == clase]
-            if not row_to_duplicate.empty:
-                vector_df = pd.concat([vector_df, row_to_duplicate], ignore_index=True)
-        vector_df
+vectorization_methods = {
+    'K-mer Frequency': vectorize_kmer_frequency,
+    # 'TF-IDF': vectorize_tfidf,
+    # 'Relative Frequency': vectorize_relative_frequency,
+    # 'K-mer Hashing': vectorize_kmer_hashing,
+}
 
-        num_classes = vector_df['specie'].nunique()
-        total_samples = len(vector_df)
-
-        test_size = max(0.2, num_classes / total_samples)
-        log_step(f"Test size a utilizar: {test_size}")
-
-        encoder = LabelEncoder()
-        vector_df['specie'] = encoder.fit_transform(vector_df['specie'])
-        vector_df = vector_df.drop(columns=['ID_genome'])
-
-        train_df, test_df = train_test_split(vector_df, test_size=test_size, stratify=vector_df['specie'])
-
-        # Separar características y etiquetas
-        X_train = train_df.drop(columns=['specie'])
-        y_train = train_df['specie']
-        X_test = test_df.drop(columns=['specie'])
-        y_test = test_df['specie']
-
-        # Normalize data
-        X_train = normalize_data(X_train)
-        X_test = normalize_data(X_test)
-
-        model = RandomForestClassifier()
-        trained_model = model.fit(X_train, y_train)
-
-        y_pred = trained_model.predict(X_test)
-        y_proba = trained_model.predict_proba(X_test)
-
-        f1 = f1_score(y_test, y_pred, average='weighted')
-        log_step(f"F1 Score: {f1}")
-        mcc = matthews_corrcoef(y_test, y_pred)
-        log_step(f"MCC: {mcc}")
-        auc = roc_auc_score(y_test, y_proba, multi_class='ovr')
-        log_step(f"AUC: {auc}")
-    except ValueError as e:
-        log_step(f"Error: {e}")
-        auc_score = None
+def evaluate_all_vectorizations(df):
+    """
+    Recorre los métodos de vectorización y llama a `run_models` para cada uno.
+    
+    Args:
+        file_path (str): Ruta al archivo con los datos de entrada.
+    
+    Returns:
+        pd.DataFrame: Tabla con los resultados para cada vectorización y modelo.
+    """
+    results = []
+    for vectorization_name, vectorization_function in vectorization_methods.items():
+        log_step(f"Applying vectorization: {vectorization_name}")
+        log_memory_usage()
+        vectorized_data = vectorization_function(df)
+        X_train, X_test, y_train, y_test, model_results = run_models(vectorized_data)
+        for model_name, metrics in model_results.items():
+            results.append({
+                'Vectorization': vectorization_name,
+                'Model': model_name,
+                **metrics
+            })
+    results_df = pd.DataFrame(results)
+    return results_df
