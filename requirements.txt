@@ -3,3 +3,6 @@ scikit-learn
 numpy
 pandas
 setuptools
+numba
+-c rapidsai -c conda-forge -c nvidia \
+    cudf=25.02 python=3.12 cuda-version=12.5

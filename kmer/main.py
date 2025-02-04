@@ -54,9 +54,9 @@ def main():
     parser = argparse.ArgumentParser(description="Process sequence files with k-mer vectorization")
     # Grupo mutuamente exclusivo para -k y -v
     # *** ACTUALIZAR: que se puedan utilizar por si solos o todos. e.g., -kvc ***
-    exclusive_group = parser.add_mutually_exclusive_group(required=True)
-    exclusive_group.add_argument('-k', help='Value of k for k-mers (single value or range, e.g., 3 or 2-12)')
-    exclusive_group.add_argument('-v', '--vectorization', action='store_true', help='Enable vectorization mode')
+    # exclusive_group = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument('-k', help='Value of k for k-mers (single value or range, e.g., 3 or 2-12)', required=True)
+    parser.add_argument('-v', '--vectorization', action='store_true', help='Enable vectorization mode')
     # exclusive_group.add_argument('-c', '--classification', action='store_true', help='Enable classification mode')
 
     #parser.add_argument('-k', required=True, help='Value of k for k-mers (single value or range, e.g., 3 or 2-12)')
@@ -104,7 +104,7 @@ def main():
     start_total = time.time()
     try:
         # compare_kmers(args, files, k_range)
-        if args.vectorization:
+        if args.vectorization and not args.k:
             if args.file:
                 if '-mer' in args.file:
                     check_tsv(args.file)
