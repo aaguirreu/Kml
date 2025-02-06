@@ -1,15 +1,12 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='kmer',
+    name='kml',
     version='1.0',
     packages=find_packages(),
-    install_requires=[
-        'biopython',
-    ],
     entry_points={
-        'console_scripts': [
-            'kmer=kmer.main:main',
+        "console_scripts": [
+            "kml = kml.main:main",
         ],
     },
     author='Álvaro Aguirre',

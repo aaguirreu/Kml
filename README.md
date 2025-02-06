@@ -55,13 +55,13 @@ conda activate Kmer
 To perform k-mer calculations, vectorize DNA sequences, and classify them using machine learning models, follow these steps:
 
 ```bash
-python -m kmer.main -k 2-10 -d <path-to-sequences-folder> -o <output-path>
+kml -k 2-10 -d <path-to-sequences-folder> -o <output-path>
 ```
 
 or
 
 ```bash
-python -m kmer.main -k 2-10 -f <path-to-sequence-file> -o <output-path>
+kml -k 2-10 -f <path-to-sequence-file> -o <output-path>
 ```
 
 ### Example of Usage
@@ -69,13 +69,13 @@ python -m kmer.main -k 2-10 -f <path-to-sequence-file> -o <output-path>
 This command performs k-mer frequency counting using the kmertools4ml utility, which calculates the frequency of subsequences of length k (between 2-10) from the DNA sequences in the specified directory:
 
 ```bash
-python -m kmer.main -k 2-10 -d ./Genomes/ -o results
+kml -k 2-10 -d ./Genomes/ -o results
 ```
 # Vectorization and Model Evaluation Command
 This command performs vectorization of the kmer frequencies and evaluates the data using all available machine learning models:
 
 ```bash
-python -m kmer.main -k 2-10 -va -ma -d ./Genomes/ -o results
+kml -k 2-10 -va -ma -d ./Genomes/ -o results
 ```
 
 The flags `-va` and `-ma` enable vectorization analysis and model analysis respectively, processing the data through the complete machine learning pipeline.
@@ -84,7 +84,7 @@ The flags `-va` and `-ma` enable vectorization analysis and model analysis respe
 This command uses a specific vectorization method (k-mer) and machine learning model (Random Forest):
 
 ```bash
-python -m kmer.main -k 2-10 -v kmer -m rf -d ./Genomes/ -o results
+kml -k 2-10 -v kmer -m rf -d ./Genomes/ -o results
 ```
 
 Where:

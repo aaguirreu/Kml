@@ -6,8 +6,8 @@ channels:
   - defaults
 dependencies:
   - python=3.12
-  - cudf
-  - cudatoolkit
+  # - cudf
+  # - cudatoolkit
   - biopython
   - scikit-learn
   - numpy
@@ -15,6 +15,9 @@ dependencies:
   - setuptools
   - psutil
   - ipykernel
-  - matplotlib  # Visualización de gráficos
-  - seaborn     # Gráficos estadísticos avanzados
-  - pyspark     # Procesamiento distribuido
+  - matplotlib
+  - seaborn
+  - pyspark
+  - pip
+  - pip:
+    - -e .
