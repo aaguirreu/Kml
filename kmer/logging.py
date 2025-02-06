@@ -1,28 +1,27 @@
 import time
 import os
 import csv
-from kmer import step_log, time_log, __author__, __date__
+import psutil
+from . import step_log, __author__, __date__
+
+def log_memory_usage():
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    # Log memory usage in MB
+    log_step(f"Memory usage: {memory_info.rss / (1024 ** 2):.2f} MB")
 
 def log_step(message):
-    print(message)
+    print(f'[{time.strftime("%Y-%m-%d %H:%M:%S")}] {message}')
     step_log.append(message)
     with open('logs/logs.log', 'a') as log_file:
         log_file.write(f'[{time.strftime("%Y-%m-%d %H:%M:%S")}] {message}\n')
 
-def save_time_log(filepath):
-    file_exists = os.path.isfile(filepath)
-    with open(filepath, 'a') as time_file:
-        writer = csv.writer(time_file, delimiter='\t')
-        if not file_exists:
-            headers = ['Genome', 'k', 'vector_secs']
-            if len(time_log[0]) > 3:
-                headers.append('sec2vec_secs')
-            writer.writerow(headers)
-        writer.writerows(time_log)
-    log_step(f"Time log saved to {filepath}")
-
 def log_results(output, files, best_k, k_range):
-    log_output_filepath = os.path.join(output, f'{__date__}.log')
+    # If 'files' is a string, wrap it in a list to avoid iterating over each character.
+    if isinstance(files, str):
+        files = [files]
+    
+    log_output_filepath = os.path.join(output, f'performance.log')
     with open(log_output_filepath, 'w') as log_file:
         log_file.write(f"""#####################################
 # Title: Kmer                       #
@@ -38,10 +37,14 @@ def log_results(output, files, best_k, k_range):
 - Frequency:
 
 """)
-        #log_file.write(f"The best performance was achieved with file {best_performance_file} using {best_k}-mer analysis.\n\n")
+        # Write information for each file
         for filepath in files:
             log_file.write(f"file: {filepath}\n")
-            log_file.write(f"size: {os.path.getsize(filepath)} bytes\n")
+            try:
+                file_size = os.path.getsize(filepath)
+            except Exception as e:
+                file_size = f"Error getting file size: {e}"
+            log_file.write(f"size: {file_size} bytes\n")
             if k_range.start == k_range.stop - 1:
                 log_file.write(f"kmer {k_range.start}\n")
             else:

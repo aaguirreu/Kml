@@ -1,0 +1,20 @@
+name: kml
+channels:
+  - rapidsai
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - cudf
+  - cudatoolkit
+  - biopython
+  - scikit-learn
+  - numpy
+  - pandas
+  - setuptools
+  - psutil
+  - ipykernel
+  - matplotlib  # Visualización de gráficos
+  - seaborn     # Gráficos estadísticos avanzados
+  - pyspark     # Procesamiento distribuido
