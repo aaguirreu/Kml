@@ -37,8 +37,8 @@ Before installing this project, please ensure that you have installed and built 
 ### Clone Repository
 
 ```bash
-git clone https://github.com/aaguirreu/Kmer.git
-cd Kmer
+git clone https://github.com/aaguirreu/kml.git
+cd kml
 ```
 
 ### Conda Environment
@@ -47,44 +47,28 @@ Set up your Conda environment as follows:
 
 ```bash
 conda env create -f environment.yml
-conda activate Kmer
+conda activate kml
 ```
 
 ## Usage
 
-To perform k-mer calculations, vectorize DNA sequences, and classify them using machine learning models, follow these steps:
+Kmer Frequency Counting Command: This command performs k-mer frequency counting using the kmertools4ml utility, which calculates the frequency of subsequences of length k (between 2-10) from the DNA sequences in the specified directory:
 
 ```bash
-kml -k 2-10 -d <path-to-sequences-folder> -o <output-path>
+kml -k 2-10 -d path-to-sequences-folder -o output-folder-path
 ```
-
-or
-
-```bash
-kml -k 2-10 -f <path-to-sequence-file> -o <output-path>
-```
-
-### Example of Usage
-# Kmer Frequency Counting Command
-This command performs k-mer frequency counting using the kmertools4ml utility, which calculates the frequency of subsequences of length k (between 2-10) from the DNA sequences in the specified directory:
+Vectorization and Model Evaluation Command: This command performs vectorization of the kmer frequencies and evaluates the data using all available machine learning models:
 
 ```bash
-kml -k 2-10 -d ./Genomes/ -o results
-```
-# Vectorization and Model Evaluation Command
-This command performs vectorization of the kmer frequencies and evaluates the data using all available machine learning models:
-
-```bash
-kml -k 2-10 -va -ma -d ./Genomes/ -o results
+kml -k 2-10 -va -ma -d path-to-sequences-folder -o output-folder-path
 ```
 
 The flags `-va` and `-ma` enable vectorization analysis and model analysis respectively, processing the data through the complete machine learning pipeline.
 
-# Specific Model and Vectorization Method
-This command uses a specific vectorization method (k-mer) and machine learning model (Random Forest):
+Specific Model and Vectorization Method: This command uses a specific vectorization method (k-mer) and machine learning model (Random Forest):
 
 ```bash
-kml -k 2-10 -v kmer -m rf -d ./Genomes/ -o results
+kml -k 2-10 -v kmer -m rf -d path-to-sequences-folder -o output-folder-path
 ```
 
 Where:
