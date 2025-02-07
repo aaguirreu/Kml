@@ -64,7 +64,6 @@ Available options:
     KMER    - K-mer Frequency
     TFIDF   - TF-IDF
     RF      - Relative Frequency
-    HASH    - K-mer Hashing
 
   Machine Learning models (-m):
     RF      - Random Forest
@@ -133,7 +132,7 @@ Examples:
                 "KMER": "K-mer Frequency",
                 "TFIDF": "TF-IDF",
                 "RF": "Relative Frequency",
-                "HASH": "K-mer Hashing",
+                # "HASH": "K-mer Hashing",
                 # "OH": "One-hot"
             }
             selected_methods = [method.strip().upper() for method in args.vectorization.split(',')]

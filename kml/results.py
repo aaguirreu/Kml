@@ -13,7 +13,7 @@ def prepare_plot_df(results_dict):
     df = df.rename(columns={'index': 'Model'})
     return df
 
-def plot_grouped_bar(results_df, output_dir):
+def plot_grouped_bar(results_df, vectorization_name, output_dir):
     """
     Plots a grouped bar chart comparing metrics across different models.
 
@@ -30,12 +30,12 @@ def plot_grouped_bar(results_df, output_dir):
     None
     """
     results_melted = results_df.melt(id_vars='Model', var_name='Metric', value_name='Score')
-    results_melted = results_melted[~results_melted['Metric'].isin(['Correct Predictions', 'Incorrect Predictions'])]
+    results_melted = results_melted[~results_melted['Metric'].isin(['Correct Predictions', 'Incorrect Predictions','K-mer'])]
 
     sns.set(style="whitegrid")
     plt.figure(figsize=(12, 8))
     sns.barplot(data=results_melted, x='Metric', y='Score', hue='Model', errorbar=None)
-    plt.title('Comparison of Metrics Across Models', fontsize=18)
+    plt.title(f'{vectorization_name} Comparison of Metrics Across Models', fontsize=18)
     plt.ylabel('Score', fontsize=14)
     plt.xlabel('Metric', fontsize=14)
     plt.xticks(rotation=45, fontsize=12)
@@ -43,10 +43,10 @@ def plot_grouped_bar(results_df, output_dir):
     plt.legend(title='Model', fontsize=12)
     plt.tight_layout()
     # Guardar el plot en lugar de mostrarlo
-    plt.savefig(f"{output_dir}/grouped_bar.png")
+    plt.savefig(f"{output_dir}/{vectorization_name}_grouped_bar.png")
     plt.close()
 
-def plot_correct_incorrect_bar(results_df, output_dir):
+def plot_correct_incorrect_bar(results_df, vectorization_name, output_dir):
     """
     Plots a bar chart comparing correct and incorrect predictions by vectorization method.
 
@@ -80,13 +80,13 @@ def plot_correct_incorrect_bar(results_df, output_dir):
         errorbar=None
     )
 
-    plt.title("Correct vs. Incorrect Predictions", fontsize=14)
+    plt.title(f"{vectorization_name} Correct vs. Incorrect Classifications", fontsize=14)
     plt.xlabel("Prediction Type", fontsize=12)
     plt.ylabel("Count", fontsize=12)
     plt.legend(title="Model", loc="upper right")
     plt.tight_layout()
 
-    plt.savefig(f"{output_dir}/correct_incorrect_bar.png")
+    plt.savefig(f"{output_dir}/{vectorization_name}_correct_incorrect_bar.png")
     plt.close()
 
 def plot_roc_curve_by_model(X_test, y_test, output_dir):
@@ -167,3 +167,54 @@ def results_to_df():
                 row.update(metrics)
                 data.append(row)
     return pd.DataFrame(data)
+
+def best_k_accuracy():
+    if not all_results:
+        return None
+
+    k_accuracy = {}
+    
+    for item in all_results:
+        for vectorization_method, models in item.items():
+            for model_name, metrics in models.items():
+                k_val = metrics["K-mer"]
+                accuracy = metrics["Accuracy"]
+                
+                if k_val not in k_accuracy:
+                    k_accuracy[k_val] = {"total": 0.0, "count": 0}
+                
+                k_accuracy[k_val]["total"] += accuracy
+                k_accuracy[k_val]["count"] += 1
+
+    # Se calcula el promedio y se selecciona el k con mayor accuracy promedio.
+    best_k = max(
+        k_accuracy.items(),
+        key=lambda x: x[1]["total"] / x[1]["count"] if x[1]["count"] > 0 else float('-inf')
+    )[0]
+    
+    return best_k
+
+def get_best_k():
+    if not all_results:
+        return None
+    metrics_keys = ["Accuracy", "F1 Score", "AUC", "MCC"]
+    k_scores = {}
+    
+    for item in all_results:
+        for vectorization_method, models in item.items():
+            for model_name, metrics in models.items():
+                k_val = metrics["K-mer"]
+                current_score = sum(metrics[key] for key in metrics_keys)
+                
+                if k_val not in k_scores:
+                    k_scores[k_val] = {"total": 0.0, "count": 0}
+                
+                k_scores[k_val]["total"] += current_score
+                k_scores[k_val]["count"] += 1
+
+    best_k = max(
+        k_scores.items(),
+        key=lambda x: x[1]["total"]/x[1]["count"]
+    )[0]
+
+    return best_k

@@ -109,6 +109,6 @@ vectorization_methods = {
     'K-mer Frequency': vectorize_kmer_frequency,
     'TF-IDF': vectorize_tfidf,
     'Relative Frequency': vectorize_relative_frequency,
-    'K-mer Hashing': vectorize_kmer_hashing,
+    # 'K-mer Hashing': vectorize_kmer_hashing,
     # 'One-hot': vectorize_onehot,
 }

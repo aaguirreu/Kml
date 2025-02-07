@@ -6,7 +6,7 @@ from .logging import log_memory_usage, log_step, log_results
 from .mlize import extract_species_from_filename, run_models
 from .vectorize import vectorization_methods
 from . import __date__, all_results
-from .results import plot_grouped_bar, plot_roc_curve_by_model, results_to_df, plot_correct_incorrect_bar, prepare_plot_df
+from .results import plot_grouped_bar, plot_roc_curve_by_model, results_to_df, plot_correct_incorrect_bar, prepare_plot_df, best_k_accuracy
 
 def evaluate_all_vectorizations(k, df, output_dir):
     """
@@ -31,17 +31,9 @@ def evaluate_all_vectorizations(k, df, output_dir):
         }
         all_results.append({vectorization_name: model_results})
         plot_df = prepare_plot_df(model_results)
-        plot_grouped_bar(plot_df, output_dir)
+        plot_grouped_bar(plot_df, vectorization_name, output_dir)
         # plot_roc_curve_by_model(X_test, y_test, output_dir)
-        plot_correct_incorrect_bar(plot_df, output_dir)
-    #     for model_name, metrics in model_results.items():
-    #         local_results.append({
-    #             'Vectorization': vectorization_name,
-    #             'Model': model_name,
-    #             **metrics
-    #         })
-    # results_df = pd.DataFrame(local_results)
-    # return results_df
+        plot_correct_incorrect_bar(plot_df, vectorization_name, output_dir)
 
 def filter_single_sample_classes(df):
     """
@@ -59,31 +51,6 @@ def filter_single_sample_classes(df):
         print(f"Found {len(single_sample_classes)} species with fewer than 3 samples. Removing these species: {single_sample_classes}")
     df = df[df['specie'].isin(counts[counts >= 3].index)]
     return df
-
-def get_best_k(all_results):
-    if not all_results:
-        return None
-    metrics_keys = ["Accuracy", "F1 Score", "AUC", "MCC"]
-    k_scores = {}
-    
-    for item in all_results:
-        for vectorization_method, models in item.items():
-            for model_name, metrics in models.items():
-                k_val = metrics["K-mer"]
-                current_score = sum(metrics[key] for key in metrics_keys)
-                
-                if k_val not in k_scores:
-                    k_scores[k_val] = {"total": 0.0, "count": 0}
-                
-                k_scores[k_val]["total"] += current_score
-                k_scores[k_val]["count"] += 1
-
-    best_k = max(
-        k_scores.items(),
-        key=lambda x: x[1]["total"]/x[1]["count"]
-    )[0]
-
-    return best_k
 
 def run_all(args, input_source, k_range):
     """
@@ -134,7 +101,7 @@ def run_all(args, input_source, k_range):
 
     # Determine the best k using our helper function
     if using_vectorization:
-        best_k = get_best_k(all_results)
+        best_k = best_k_accuracy()
         log_results(args.output_dir, input_source, best_k, k_range)
 
         metrics_output_filepath = os.path.join(args.output_dir, f'performance_metrics.tsv')
