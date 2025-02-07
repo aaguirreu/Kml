@@ -37,8 +37,8 @@ Before installing this project, please ensure that you have installed and built 
 ### Clone Repository
 
 ```bash
-git clone https://github.com/aaguirreu/kml.git
-cd kml
+git clone https://github.com/aaguirreu/Kml.git
+cd Kml
 ```
 
 ### Conda Environment
