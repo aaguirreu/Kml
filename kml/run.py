@@ -3,7 +3,7 @@ import csv
 import subprocess
 import pandas as pd
 from .logging import log_memory_usage, log_step, log_results
-from .mlize import extract_species_from_filename, run_models
+from .mlize import extract_species_from_filename, extract_species_from_csv, run_models
 from .vectorize import vectorization_methods
 from . import __date__, all_results
 from .results import plot_grouped_bar, plot_roc_curve_by_model, results_to_df, plot_correct_incorrect_bar, prepare_plot_df, best_k_accuracy
@@ -48,7 +48,10 @@ def filter_single_sample_classes(df):
     counts = df['specie'].value_counts()
     single_sample_classes = counts[counts < 3].index.tolist()
     if len(single_sample_classes) > 0:
-        print(f"Found {len(single_sample_classes)} species with fewer than 3 samples. Removing these species: {single_sample_classes}")
+        display = single_sample_classes[:6]
+        if len(single_sample_classes) > 6:
+            display = display + [f"and {len(single_sample_classes) - 6} more"]
+        log_step(f"Found {len(single_sample_classes)} species with fewer than 3 samples. Removing these species: {display}")
     df = df[df['specie'].isin(counts[counts >= 3].index)]
     return df
 
@@ -62,42 +65,51 @@ def run_all(args, input_source, k_range):
     using_vectorization = args.vectorization_all or (args.vectorization and len(args.vectorization.split(',')) > 0)
     
     for k in k_range:
-        log_step(f"Initiating kmertools kml counting for {k}-mer")
         output_dir = f"{args.output_dir}/{str(k)}-mer/"
-        cmd = [
-            "kmertools", "kml",
-            "-i", input_source,
-            "-o", output_dir,
-            "-k", str(k),
-            "--acgt"
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            log_step(f"Successfully executed kmertools for {k}-mer")
-        except subprocess.CalledProcessError as e:
-            log_step(f"An error occurred while executing kmertools for {k}-mer analysis. Details: {e.stderr}")
-            continue
-
-        output_filepath = os.path.join(output_dir, 'kmers.counts')
-        try:
-            df = pd.read_csv(output_filepath, sep='\t')
-            # log_step(f"File {output_filepath} read successfully.")
-        except Exception as e:
-            log_step(f"Failed to read the file '{output_filepath}'. Error details: {e}")
-            continue
+        if args.ctr:
+            try:
+                cmd = [
+                    "kmertools", "kml",
+                    "-i", input_source,
+                    "-o", output_dir,
+                    "-k", str(k),
+                    "--acgt"
+                ]
+                log_step(f"Initiating kmertools kml counting for {k}-mer")
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                log_step(f"Successfully executed kmertools for {k}-mer")
+            except subprocess.CalledProcessError as e:
+                log_step(f"An error occurred while executing kmertools for {k}-mer analysis. Details: {e.stderr}")
+                continue
 
         if using_vectorization:
+            output_filepath = os.path.join(output_dir, 'kmers.counts')
             try:
-                # Extract taxonomy from the 'label' column
-                df["label"] = df["file"].apply(extract_species_from_filename)
+                df = pd.read_csv(output_filepath, sep='\t')
+                # log_step(f"File {output_filepath} read successfully.")
+            except Exception as e:
+                log_step(f"Failed to read the file '{output_filepath}'. Error details: {e}")
+                continue
+
+            try:
+                # Extract taxonomy from the 'file' column
+                if args.specie_csv:
+                    # Added low_memory=False to avoid DtypeWarning
+                    df_species = pd.read_csv(args.specie_csv, low_memory=False)[['accession', 'species']]
+                    species_map = df_species.set_index('accession')['species']
+                    df["label"] = df["file"].apply(lambda x: extract_species_from_csv(x, species_map))
+                else:
+                    df["label"] = df["file"].apply(extract_species_from_filename)
+                    
                 df = df.rename(columns={'label': 'specie'})
                 df = filter_single_sample_classes(df)
+                log_step(f"Initiating vectorization for {k}-mer")
                 evaluate_all_vectorizations(k, df, output_dir)
+                log_step(f"Successfully completed processing for {k}-mer analysis\n")
             except Exception as e:
                 log_step(f"An error occurred during vectorization for {k}-mer processing: {e}")
                 log_results(args.output_dir, input_source, k, k_range)
                 return
-            log_step(f"Successfully completed processing for {k}-mer analysis\n")
 
     # Determine the best k using our helper function
     if using_vectorization:

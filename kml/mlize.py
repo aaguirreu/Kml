@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 from .logging import log_step
 from . import all_results
+import re
 
 # Define the models to evaluate.
 models = {
@@ -150,3 +151,10 @@ def extract_species_from_filename(filename):
     return f"{genus} {species}"
 
     return f"{genus} {species}"
+
+def extract_species_from_csv(filename, species_map):
+    # Extract the accession from the filename using regex
+    match = re.search(r'(^[^_]+_[^_]+)', filename)
+    if match:
+        return species_map.get(match.group(1))
+    return None

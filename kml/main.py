@@ -94,7 +94,16 @@ Examples:
                        help='Use all available vectorization methods')
     parser.add_argument('-ma', '--models-all', action='store_true',
                        help='Use all available models')
+    # Agregar nuevo argumento --specie-csv
+    parser.add_argument('--specie-csv', type=str, help="CSV file with columns 'accession' and 'species'")
+    # Agregar nuevo flag --ctr
+    parser.add_argument('--ctr', action='store_true', help="If true, run kmertools kml counting subprocess")
     args = parser.parse_args()
+
+    # Added execution condition: require either --ctr OR (--models/(--models-all) and --vectorization/(--vectorization-all))
+    if not (args.ctr or ((args.models or args.models_all) and (args.vectorization or args.vectorization_all))):
+        log_step("No execution condition met. Provide either --ctr or both --models and --vectorization. Exiting.")
+        sys.exit(0)
 
     # Si se especifica la flag --models o --models-all, filtrar el diccionario de modelos
     if args.models or args.models_all:
@@ -168,7 +177,7 @@ Examples:
         sys.exit(1)
 
     # Determine the "input source": a string with the path to a file or directory
-    valid_extensions = ('.fasta', '.fna', '.fa', '.fastq')
+    # valid_extensions = ('.fasta', '.fna', '.fa', '.fastq', '.gz')
     if args.file:
         input_source = args.file
         if args.vectorization:  # Ahora esto comprueba si hay una cadena, no un booleano
@@ -176,10 +185,10 @@ Examples:
                 log_step("In vectorization mode, the input file must be a .tsv file generated with k-mers (containing '-mer' in the name).")
                 sys.exit(1)
             check_tsv(input_source)
-        else:
-            if not input_source.endswith(valid_extensions):
-                log_step(f"The file {input_source} does not have a valid extension {valid_extensions}.")
-                sys.exit(1)
+        # else:
+            # if not input_source.endswith(valid_extensions):
+            #     log_step(f"The file {input_source} does not have a valid extension {valid_extensions}.")
+            #     sys.exit(1)
     elif args.directory:
         input_source = args.directory
         if not os.path.isdir(input_source):
