@@ -1,4 +1,3 @@
-import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -6,88 +5,111 @@ from sklearn.metrics import roc_curve, auc
 from sklearn.preprocessing import label_binarize
 from .mlize import models
 from . import all_results
+import polars as pl  # se agrega para trabajar con polars
 
 def prepare_plot_df(results_dict):
-    # Converts a dictionary of metrics into a DataFrame, like the old transformations
-    df = pd.DataFrame(results_dict).T.reset_index()
-    df = df.rename(columns={'index': 'Model'})
+    # Convierte el diccionario de métricas en una DataFrame usando polars
+    df = pl.DataFrame([{"Model": k, **v} for k, v in results_dict.items()])
     return df
 
 def plot_grouped_bar(results_df, vectorization_name, output_dir):
-    """
-    Plots a grouped bar chart comparing metrics across different models.
+    # Realiza el melt usando Polars (queda como Polars DataFrame)
+    results_melted = results_df.melt(
+        id_vars='Model',
+        variable_name='Metric',
+        value_name='Score'
+    ).filter(~pl.col("Metric").is_in(["Correct Predictions", "Incorrect Predictions", "K-mer"]))
+    
+    # Convertir cada columna a array de NumPy
+    models = results_melted["Model"].to_numpy()
+    metrics = results_melted["Metric"].to_numpy()
+    scores = results_melted["Score"].to_numpy()
 
-    Parameters:
-    results_df (pd.DataFrame): A DataFrame containing the results with models as columns and metrics as rows.
+    # Obtener los valores únicos en cada dimensión
+    unique_models = np.unique(models)
+    unique_metrics = np.unique(metrics)
+    
+    # Configurar el gráfico
+    x = np.arange(len(unique_metrics))
+    bar_width = 0.8 / len(unique_models)
 
-    The function transforms the DataFrame, excluding 'Correct Predictions' and 'Incorrect Predictions' metrics,
-    and then uses seaborn to create a grouped bar plot. The plot displays the comparison of various metrics
-    across different models.
-
-    The plot is customized with titles, labels, and a legend, and the metrics are normalized to a range of 0 to 1.
-
-    Returns:
-    None
-    """
-    results_melted = results_df.melt(id_vars='Model', var_name='Metric', value_name='Score')
-    results_melted = results_melted[~results_melted['Metric'].isin(['Correct Predictions', 'Incorrect Predictions','K-mer'])]
-
-    sns.set(style="whitegrid")
     plt.figure(figsize=(12, 8))
-    sns.barplot(data=results_melted, x='Metric', y='Score', hue='Model', errorbar=None)
+    
+    # Dibujar cada grupo de barras para cada modelo
+    for i, model in enumerate(unique_models):
+        # Para cada métrica, extraer la puntuación correspondiente
+        model_scores = []
+        for metric in unique_metrics:
+            # Buscamos la puntuación; asumimos que hay un único valor por (model, metric)
+            mask = (models == model) & (metrics == metric)
+            score = scores[mask][0] if np.any(mask) else 0
+            model_scores.append(score)
+        plt.bar(x + i * bar_width, model_scores, width=bar_width, label=model)
+
     plt.title(f'{vectorization_name} Comparison of Metrics Across Models', fontsize=18)
-    plt.ylabel('Score', fontsize=14)
     plt.xlabel('Metric', fontsize=14)
-    plt.xticks(rotation=45, fontsize=12)
-    plt.ylim(0, 1)  # Normalizar las métricas
+    plt.ylabel('Score', fontsize=14)
+    plt.xticks(x + bar_width * (len(unique_models) - 1) / 2, unique_metrics, rotation=45, fontsize=12)
+    plt.ylim(0, 1)
     plt.legend(title='Model', fontsize=12)
     plt.tight_layout()
-    # Guardar el plot en lugar de mostrarlo
     plt.savefig(f"{output_dir}/{vectorization_name}_grouped_bar.png")
     plt.close()
 
 def plot_correct_incorrect_bar(results_df, vectorization_name, output_dir):
     """
-    Plots a bar chart comparing correct and incorrect predictions by vectorization method.
-
-    This function takes a DataFrame containing prediction results for different vectorization methods
-    and models, reshapes the data for visualization, and generates a bar chart that highlights the number
-    of correct versus incorrect predictions. The resulting plot is saved to a specified output directory as
-    a PNG file.
+    Genera un gráfico de barras comparando las predicciones correctas e incorrectas,
+    extrayendo los datos directamente de un DataFrame de Polars.
 
     Parameters:
-        results_df (pandas.DataFrame): DataFrame with columns 'Vectorization', 'Model', 'Correct Predictions',
-                                       and 'Incorrect Predictions', containing the data needed for the plot.
-        output_dir (str): The path to the directory where the generated bar chart image will be saved.
-
-    Returns:
-        None
+        results_df (pl.DataFrame): DataFrame de Polars con columnas 'Model',
+            'Correct Predictions' e 'Incorrect Predictions'.
+        vectorization_name (str): Nombre de la técnica de vectorización (para el título del gráfico).
+        output_dir (str): Directorio donde se guardará el gráfico.
     """
-    # Melt focusing on Correct vs. Incorrect
+    # Realiza el melt con Polars
     df_melted = results_df.melt(
         id_vars="Model",
         value_vars=["Correct Predictions", "Incorrect Predictions"],
-        var_name="Prediction Type",
+        variable_name="Prediction Type",
         value_name="Count"
     )
-
+    
+    # Extraer los datos a arrays de NumPy
+    models = df_melted["Model"].to_numpy()
+    pred_types = df_melted["Prediction Type"].to_numpy()
+    counts = df_melted["Count"].to_numpy()
+    
+    # Obtener los valores únicos en cada dimensión
+    unique_models = np.unique(models)
+    unique_pred_types = np.unique(pred_types)
+    
+    # Configurar posiciones para las barras
+    x = np.arange(len(unique_pred_types))
+    bar_width = 0.8 / len(unique_models)
+    
     plt.figure(figsize=(8, 5))
-    sns.barplot(
-        data=df_melted,
-        x="Prediction Type",
-        y="Count",
-        hue="Model",
-        errorbar=None
-    )
-
+    
+    # Dibujar barras para cada modelo
+    for i, model in enumerate(unique_models):
+        model_counts = []
+        for p_type in unique_pred_types:
+            mask = (models == model) & (pred_types == p_type)
+            # Asumimos que hay un único valor para cada combinación
+            count_val = counts[mask][0] if np.any(mask) else 0
+            model_counts.append(count_val)
+        plt.bar(x + i * bar_width, model_counts, width=bar_width, label=model)
+    
     plt.title(f"{vectorization_name} Correct vs. Incorrect Classifications", fontsize=14)
     plt.xlabel("Prediction Type", fontsize=12)
     plt.ylabel("Count", fontsize=12)
+    plt.xticks(x + bar_width * (len(unique_models) - 1) / 2, unique_pred_types)
     plt.legend(title="Model", loc="upper right")
     plt.tight_layout()
-
+    
     plt.savefig(f"{output_dir}/{vectorization_name}_correct_incorrect_bar.png")
     plt.close()
+
 
 def plot_roc_curve_by_model(X_test, y_test, output_dir):
     """
@@ -145,7 +167,7 @@ def plot_roc_curve_by_model(X_test, y_test, output_dir):
 
 def results_to_df():
     """
-    Converts the results of various vectorization methods and models into a pandas DataFrame.
+    Converts the results of various vectorization methods and models into a polars DataFrame.
 
     This function iterates over a nested dictionary structure `all_results` where the first level 
     keys are vectorization methods, the second level keys are models, and the values are dictionaries 
@@ -153,7 +175,7 @@ def results_to_df():
     combination of vectorization method and model, along with their associated metrics.
 
     Returns:
-        pd.DataFrame: A DataFrame where each row contains the vectorization method, model, and their 
+        pl.DataFrame: A DataFrame where each row contains the vectorization method, model, and their 
                       corresponding metrics.
     """
     data = []
@@ -166,7 +188,7 @@ def results_to_df():
                 }
                 row.update(metrics)
                 data.append(row)
-    return pd.DataFrame(data)
+    return pl.DataFrame(data)
 
 def best_k_accuracy():
     if not all_results:

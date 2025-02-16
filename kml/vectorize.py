@@ -1,5 +1,5 @@
 import hashlib
-import pandas as pd
+import polars as pl
 import numpy as np
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.preprocessing import OneHotEncoder
@@ -11,98 +11,139 @@ def vectorize_kmer_frequency(df):
     """
     return df
 
-def vectorize_tfidf(df):
+def vectorize_tfidf(df: pl.DataFrame) -> pl.DataFrame:
     """
-    Performs TF-IDF vectorization on the k-mer columns in the DataFrame.
+    Realiza la transformación TF-IDF sobre las columnas de k-mers.
     
-    Parameters:
-        df (pd.DataFrame): DataFrame containing:
-            - "file"
-            - "specie" (or "specie")
-            - All other columns are k-mer counts.
+    TF (Term Frequency): cada valor se divide por la suma de la fila.
+    IDF (Inverse Document Frequency): para cada k-mer se calcula 
+        log((n_rows + 1) / (doc_freq + 1)) + 1,
+    donde doc_freq es la cantidad de filas en las que el k-mer es mayor a 0.
     
-    Returns:
-        pd.DataFrame: DataFrame with "file", "specie", and the transformed k-mer values.
-    """
-    specie_column = df["specie"]
-    kmer_data = df.drop(columns=["file", "specie"])
-    transformer = TfidfTransformer()
-    # Convertir a float para TF-IDF
-    tfidf_matrix = transformer.fit_transform(kmer_data.astype(float))
-    vectors_df = pd.DataFrame(tfidf_matrix.toarray(), columns=kmer_data.columns, index=df["file"])
-    vectors_df = vectors_df.reset_index().rename(columns={"index": "file"})
-    vectors_df.insert(1, "specie", specie_column.values)
-    return vectors_df
-
-def vectorize_relative_frequency(df):
-    vector_list = []
-    for index, row in df.iterrows():
-        total_kmers = row[2:].sum()
-        if total_kmers > 0:
-            normalized = row[2:] / total_kmers 
-        else:
-            normalized = row[2:]
+    Parámetros:
+        df (pl.DataFrame): DataFrame con columnas "file", "specie" y k-mer counts.
         
-        vector_list.append(normalized)
-
-    vectors_df = pd.DataFrame(vector_list, columns=df.columns[2:])
-
-    vectors_df.insert(0, 'file', df['file'])
-    vectors_df.insert(1, 'specie', df['specie'])
-    vector_list
+    Retorna:
+        pl.DataFrame: DataFrame con las columnas "file", "specie" y los valores TF-IDF para cada k-mer.
+    """
+    # Extraer las columnas "specie" y "file"
+    specie_column = df["specie"]
+    file_column = df["file"]
+    
+    # Seleccionar las columnas de k-mers
+    kmer_data = df.drop(["file", "specie"])
+    
+    # Convertir los k-mers a float y extraer como array de NumPy
+    kmer_np = kmer_data.with_columns([pl.col(c).cast(pl.Float64) for c in kmer_data.columns]).to_numpy()
+    
+    # Crear y aplicar el transformer TF-IDF
+    transformer = TfidfTransformer()
+    tfidf_matrix = transformer.fit_transform(kmer_np)
+    
+    # Convertir la matriz TF-IDF a array denso
+    dense_tfidf = tfidf_matrix.toarray()
+    
+    # Crear DataFrame de Polars con los nombres de columnas originales de los k-mers
+    vectors_df = pl.DataFrame(dense_tfidf, schema=kmer_data.columns)
+    
+    # Insertar las columnas "file" y "specie" al final y luego reordenarlas
+    vectors_df = vectors_df.with_columns([
+        pl.Series("file", file_column.to_numpy()),
+        pl.Series("specie", specie_column.to_numpy())
+    ])
+    vectors_df = vectors_df.select(["file", "specie"] + kmer_data.columns)
+    
     return vectors_df
 
-def vectorize_kmer_hashing(df, num_buckets=10):
+def vectorize_relative_frequency(df: pl.DataFrame) -> pl.DataFrame:
     """
-    Performs k-mer hashing vectorization.
-    
-    For each k-mer in each row, a bucket is computed (using SHA256) and its count is added to that bucket.
-    
-    Parameters:
-        df (pd.DataFrame): DataFrame with "file", "specie", and k-mer counts.
-        num_buckets (int): Number of buckets to use.
-    
-    Returns:
-        pd.DataFrame: DataFrame with "file", "specie", and bucket columns (e.g., bucket_0, bucket_1, ...).
-    """
-    hashed_vectors = []
-    for _, row in df.iterrows():
-        vector = [0] * num_buckets
-        for kmer, count in row[2:].items():
-            bucket_index = int(hashlib.sha256(kmer.encode()).hexdigest(), 16) % num_buckets
-            vector[bucket_index] += count
-        hashed_vectors.append(vector)
-    vectors_df = pd.DataFrame(hashed_vectors, columns=[f"bucket_{i}" for i in range(num_buckets)])
-    vectors_df.insert(0, "file", df["file"].values)
-    vectors_df.insert(1, "specie", df["specie"].values)
-    return vectors_df
+    Calcula la frecuencia relativa de cada k-mer en cada muestra.
 
-def vectorize_onehot(df):
+    Para cada fila se suma el total de k-mers y se divide cada valor por dicha suma.
+
+    Parámetros:
+        df (pl.DataFrame): DataFrame con columnas "file", "specie" y k-mer counts.
+
+    Retorna:
+        pl.DataFrame: DataFrame con las columnas "file", "specie" y los k-mers convertidos
+                      a frecuencias relativas.
     """
-    Performs one-hot encoding on the k-mer columns in the DataFrame using sklearn's OneHotEncoder.
-    
-    Converts counts to binary (presence/absence) and uses drop='if_binary'
-    to avoid duplicating binary features.
+    id_cols = ["file", "specie"]
+    numeric_cols = [col for col in df.columns if col not in id_cols]
+
+    # Calcular la suma horizontal de los k-mers en cada fila.
+    df = df.with_columns(pl.sum_horizontal(numeric_cols).alias("row_sum"))
+
+    # Dividir todas las columnas numéricas por 'row_sum' en una sola operación.
+    df = df.with_columns(
+        [(pl.col(col) / pl.col("row_sum")).alias(col) for col in numeric_cols]
+    ).drop("row_sum")
+
+    return df
+
+
+def vectorize_kmer_hashing(df: pl.DataFrame, num_buckets: int = 10) -> pl.DataFrame:
     """
-    id_specie_columns = ['file', 'specie']
-    if not all(col in df.columns for col in id_specie_columns):
-        raise ValueError("Both 'file' and 'specie' columns must be present.")
+    Realiza la vectorización mediante hashing de k-mers.
     
-    kmer_data = df.drop(columns=id_specie_columns)
-    kmer_presence = (kmer_data > 0).astype(int)
+    Para cada columna de k-mer se calcula un bucket (usando SHA256) y se agregan los
+    conteos de todos los k-mers que caen en el mismo bucket.
     
-    # Use drop='if_binary' to avoid duplicating binary features
-    encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore', drop='if_binary')
-    encoded_data = encoder.fit_transform(kmer_presence)
+    Esta implementación itera fila a fila (lo que puede ser menos eficiente en datasets muy grandes).
     
-    # Generate feature names using the original k-mer columns
-    feature_names = [f"{col}_present" for col in kmer_data.columns]
+    Parámetros:
+        df (pl.DataFrame): DataFrame con columnas "file", "specie" y k-mer counts.
+        num_buckets (int): Número de buckets a utilizar.
     
-    vectors_df = pd.DataFrame(encoded_data, columns=feature_names)
-    vectors_df.insert(0, 'file', df['file'])
-    vectors_df.insert(1, 'specie', df['specie'])
+    Retorna:
+        pl.DataFrame: DataFrame con columnas "file", "specie" y buckets (e.g., bucket_0, bucket_1, ...).
+    """
+    id_cols = ["file", "specie"]
+    numeric_cols = [col for col in df.columns if col not in id_cols]
     
-    return vectors_df
+    # Precalcular la asignación de cada k-mer a un bucket
+    bucket_map = {col: int(hashlib.sha256(col.encode()).hexdigest(), 16) % num_buckets for col in numeric_cols}
+    
+    # Función que se aplicará a cada fila para agrupar los conteos por bucket
+    def hash_row(row: dict) -> list:
+        buckets = [0] * num_buckets
+        for col in numeric_cols:
+            buckets[bucket_map[col]] += row[col]
+        return buckets
+
+    # Aplicar la función de hashing fila a fila; el resultado es una columna de listas
+    df = df.with_columns(
+        pl.struct(numeric_cols)
+        .apply(lambda s: hash_row(s), return_dtype=pl.List(pl.Int64))
+        .alias("hashed")
+    )
+    
+    # Expandir la columna de listas en columnas separadas para cada bucket
+    for i in range(num_buckets):
+        df = df.with_columns(pl.col("hashed").arr.get(i).alias(f"bucket_{i}"))
+    
+    df = df.drop("hashed")
+    return df
+
+def vectorize_onehot(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Realiza la codificación one-hot en las columnas de k-mers.
+    
+    Convierte los conteos a valores binarios (1 si el k-mer está presente, 0 si no).
+    
+    Parámetros:
+        df (pl.DataFrame): DataFrame con columnas "file", "specie" y k-mer counts.
+        
+    Retorna:
+        pl.DataFrame: DataFrame con las columnas "file", "specie" y los k-mers codificados en binario.
+    """
+    id_cols = ["file", "specie"]
+    numeric_cols = [col for col in df.columns if col not in id_cols]
+    
+    for col in numeric_cols:
+        df = df.with_columns((pl.col(col) > 0).cast(pl.Int64).alias(col))
+    
+    return df
 
 # Dictionary containing the vectorization methods to evaluate
 vectorization_methods = {

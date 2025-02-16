@@ -4,7 +4,7 @@ import os
 import argparse
 import traceback
 import sys
-import pandas as pd
+import polars as pl
 from . import __date__
 from .logging import log_step
 from .run import run_all, evaluate_all_vectorizations
@@ -36,7 +36,7 @@ def check_tsv(file_path):
         sys.exit(1)
 
     try:
-        df = pd.read_csv(file_path, sep='\t')
+        df = pl.read_csv(file_path, sep='\t')
         required_columns = ['file', 'label']
         if not all(col in df.columns[:2] for col in required_columns):
             log_step(f"Error: The file {file_path} must contain the columns {required_columns} in this exact order at the beginning.")

@@ -11,13 +11,13 @@ dependencies:
   - biopython
   - scikit-learn
   - numpy
-  - pandas
+  # - pandas
   - setuptools
   - psutil
   - ipykernel
   - matplotlib
   - seaborn
-  - pyspark
+  # - pyspark
   - pip
   - pip:
     - -e .

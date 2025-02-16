@@ -4,7 +4,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
-import pandas as pd
+import polars as pl
 import numpy as np
 from .logging import log_step
 from . import all_results
@@ -55,7 +55,7 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True):
         else:
             auc_score = None
 
-    correct_predictions = np.sum(y_test == y_pred)
+    correct_predictions = np.sum(np.array(y_test) == np.array(y_pred))
     incorrect_predictions = len(y_test) - correct_predictions
 
     return {
@@ -69,7 +69,7 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True):
 
 def run_models(df):
     # Data Preparation
-    X = df.iloc[:, 2:]  # Assuming k-mer counts start from the 3rd column
+    X = df[:, 2:]  # Assuming k-mer counts start from the 3rd column
     y = df['specie']
     
     # # Print class distribution before splitting
@@ -88,9 +88,9 @@ def run_models(df):
     # Print sizes and distributions after splitting
     # print(f"Training set size: {len(y_train)}, Test set size: {len(y_test)}\n")
     # print("Training set class distribution:")
-    # print(pd.Series(y_train).value_counts(),"\n")
+    # print(pl.Series(y_train).value_counts(),"\n")
     # print("Test set class distribution:")
-    # print(pd.Series(y_test).value_counts(),"\n")
+    # print(pl.Series(y_test).value_counts(),"\n")
     local_results = {}
     for model_name, model in models.items():
         log_step(f"Starting evaluation for model: {model_name}.")
@@ -150,11 +150,20 @@ def extract_species_from_filename(filename):
     species = parts[2]
     return f"{genus} {species}"
 
-    return f"{genus} {species}"
+def extract_species_from_csv(df, df_species):
+    df = df.with_columns(
+        pl.col("file")
+        .str.extract(r"(GCA_\d+\.\d+)")
+        .alias("accession")
+    )
 
-def extract_species_from_csv(filename, species_map):
-    # Extract the accession from the filename using regex
-    match = re.search(r'(^[^_]+_[^_]+)', filename)
-    if match:
-        return species_map.get(match.group(1))
-    return None
+    df = df.join(df_species, on="accession", how="left")
+    df = df.rename({"species": "specie"})
+
+    cols = df.columns
+    cols.remove("specie")
+    cols.insert(1, "specie")
+    df = df.select(cols)
+    df = df.drop("label")
+    df = df.drop("accession")
+    return df
