@@ -153,7 +153,7 @@ def extract_species_from_filename(filename):
 def extract_species_from_csv(df, df_species):
     df = df.with_columns(
         pl.col("file")
-        .str.extract(r"(GCA_\d+\.\d+)")
+        .str.extract(r"^([^_]+_[^_]+)", 0)
         .alias("accession")
     )
 
@@ -166,4 +166,11 @@ def extract_species_from_csv(df, df_species):
     df = df.select(cols)
     df = df.drop("label")
     df = df.drop("accession")
+    
+    rows_before = df.height
+    df = df.drop_nulls(subset=["specie"])
+    rows_after = df.height
+    log_step(f"Rows eliminated: {rows_before - rows_after}")
+    log_step(f"Dataset shape: ({rows_after}, {len(df.columns)})")
+    
     return df
