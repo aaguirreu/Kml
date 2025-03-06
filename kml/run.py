@@ -4,8 +4,9 @@ import subprocess
 from .logging import log_memory_usage, log_step, log_results
 from .mlize import extract_species_from_filename, extract_species_from_csv, run_models
 from .vectorize import vectorization_methods
-from . import __date__, all_results
-from .results import plot_grouped_bar, plot_roc_curve_by_model, results_to_df, plot_correct_incorrect_bar, prepare_plot_df, best_k_accuracy
+from . import __date__
+from .disk_storage import save_result, clear_results
+from .results import plot_grouped_bar, plot_roc_curve_by_model, results_to_df, plot_correct_incorrect_bar, plot_bacc_mcc_4panels, prepare_plot_df, best_k_accuracy
 import polars as pl
 
 def evaluate_all_vectorizations(k, df, output_dir):
@@ -19,7 +20,6 @@ def evaluate_all_vectorizations(k, df, output_dir):
     Returns:
         pl.DataFrame: A table with the results (metrics) for each vectorization method and model.
     """
-    local_results = []
     for vectorization_name, vectorization_function in vectorization_methods.items():
         # log_memory_usage()
         log_step(f"Applying vectorization: {vectorization_name}")
@@ -30,7 +30,8 @@ def evaluate_all_vectorizations(k, df, output_dir):
             model_name: {'K-mer': k, **metrics}
             for model_name, metrics in model_results.items()
         }
-        all_results.append({vectorization_name: model_results})
+        # Save results to disk instead of storing in memory
+        save_result(vectorization_name, model_results)
         plot_df = prepare_plot_df(model_results)
         plot_grouped_bar(plot_df, vectorization_name, output_dir)
         # plot_roc_curve_by_model(X_test, y_test, output_dir)
@@ -62,6 +63,9 @@ def run_all(args, input_source, k_range):
     usando input_source (archivo o directorio). Si la vectorización está habilitada,
     lee el archivo TSV generado y lo envía a evaluate_all_vectorizations.
     """
+    # Clear previous results at the beginning
+    clear_results()
+    
     # Determinar si se usará vectorización (si se especificó algún método o -va)
     using_vectorization = args.vectorization_all or (args.vectorization and len(args.vectorization.split(',')) > 0)
     
@@ -125,13 +129,37 @@ def run_all(args, input_source, k_range):
 
     # Determinar el mejor k usando la función auxiliar
     if using_vectorization:
-        best_k = best_k_accuracy()
-        log_results(args.output_dir, input_source, best_k, k_range)
-
-        metrics_output_filepath = os.path.join(args.output_dir, f'performance_metrics.tsv')
         try:
-            # Suponiendo que results_to_df() ahora retorna un DataFrame de Polars
-            results_to_df().write_csv(metrics_output_filepath, separator='\t')
-            log_step(f"Performance metrics have been successfully saved to {metrics_output_filepath}")
+            best_k = best_k_accuracy()
+            if best_k is not None:
+                log_results(args.output_dir, input_source, best_k, k_range)
+            else:
+                log_step("Could not determine best k-mer size. Using default.")
+                best_k = list(k_range)[-1] if k_range else None
+                
+            # Generate the metrics file
+            metrics_output_filepath = os.path.join(args.output_dir, 'performance_metrics.tsv')
+            try:
+                # Get results from disk using results_to_df
+                results_df = results_to_df()
+                if not results_df.is_empty():
+                    # Save the DataFrame to a TSV file
+                    results_df.write_csv(metrics_output_filepath, separator='\t')
+                    log_step(f"Performance metrics have been successfully saved to {metrics_output_filepath}")
+                    
+                    # Generate the summary plot
+                    try:
+                        plot_bacc_mcc_4panels(results_df, args.output_dir)
+                        log_step("Successfully generated BACC/MCC 4-panel plot")
+                    except Exception as e:
+                        log_step(f"Error generating BACC/MCC plot: {str(e)}")
+                else:
+                    log_step("No results available to save to metrics file")
+            except Exception as e:
+                log_step(f"An error occurred while saving the performance metrics file: {str(e)}")
+                import traceback
+                traceback.print_exc()
         except Exception as e:
-            log_step(f"An error occurred while saving the performance metrics file: {e}")
+            log_step(f"Error in final result processing: {str(e)}")
+            import traceback
+            traceback.print_exc()

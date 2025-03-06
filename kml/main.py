@@ -10,6 +10,7 @@ from .logging import log_step
 from .run import run_all, evaluate_all_vectorizations
 from .mlize import models  # Import the models to allow filtering based on user input
 from .vectorize import vectorization_methods
+from .disk_storage import clear_results
 
 def parse_k_range(k_str):
     """
@@ -206,9 +207,14 @@ Examples:
         log_step(f"Error during k-mer processing: {e}")
         traceback.print_exc()
         log_step("Exiting the program")
+        # Clean up temporary files before exiting
+        clear_results()
         sys.exit(1)
     end_total = time.time()
     log_step(f"Total time: {end_total - start_total} seconds")
+    
+    # Clean up temporary files when finished
+    clear_results()
 
 if __name__ == "__main__":
     main()

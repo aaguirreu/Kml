@@ -4,8 +4,26 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
 from sklearn.preprocessing import label_binarize
 from .mlize import models
-from . import all_results
+from .disk_storage import load_all_results
 import polars as pl  # se agrega para trabajar con polars
+from matplotlib import cm
+import matplotlib.colors as mcolors
+
+# Define the model-specific color palette
+def get_model_colors():
+    """Return a dictionary mapping model names to specific colors"""
+    return {
+        'Random Forest': '#617EB6',          # Blue
+        'Logistic Regression': '#37BA9A',    # Teal green
+        'Support Vector Machine (RBF Kernel)': '#B772AF'  # Purple
+    }
+
+# Keep the original colormap for metric-based coloring
+def get_cmap_norm():
+    """Return the standard colormap and normalizer for all plots"""
+    cmap = cm.get_cmap('RdYlBu')
+    norm = mcolors.Normalize(vmin=0, vmax=1)
+    return cmap, norm
 
 def prepare_plot_df(results_dict):
     # Convierte el diccionario de métricas en una DataFrame usando polars
@@ -29,6 +47,9 @@ def plot_grouped_bar(results_df, vectorization_name, output_dir):
     unique_models = np.unique(models)
     unique_metrics = np.unique(metrics)
     
+    # Get the model color dictionary
+    model_colors = get_model_colors()
+    
     # Configurar el gráfico
     x = np.arange(len(unique_metrics))
     bar_width = 0.8 / len(unique_models)
@@ -39,12 +60,21 @@ def plot_grouped_bar(results_df, vectorization_name, output_dir):
     for i, model in enumerate(unique_models):
         # Para cada métrica, extraer la puntuación correspondiente
         model_scores = []
+        model_colors_with_alpha = []
         for metric in unique_metrics:
             # Buscamos la puntuación; asumimos que hay un único valor por (model, metric)
             mask = (models == model) & (metrics == metric)
             score = scores[mask][0] if np.any(mask) else 0
             model_scores.append(score)
-        plt.bar(x + i * bar_width, model_scores, width=bar_width, label=model)
+            
+            # Get base color and add alpha based on the score
+            base_color = model_colors.get(model, '#333333')
+            # Convert hex to RGBA and set alpha based on score
+            r, g, b = tuple(int(base_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
+            alpha = max(0.3, score)  # Minimum alpha of 0.3 to ensure visibility
+            model_colors_with_alpha.append((r, g, b, alpha))
+        
+        plt.bar(x + i * bar_width, model_scores, width=bar_width, label=model, color=model_colors_with_alpha)
 
     plt.title(f'{vectorization_name} Comparison of Metrics Across Models', fontsize=18)
     plt.xlabel('Metric', fontsize=14)
@@ -84,6 +114,9 @@ def plot_correct_incorrect_bar(results_df, vectorization_name, output_dir):
     unique_models = np.unique(models)
     unique_pred_types = np.unique(pred_types)
     
+    # Get the model color dictionary
+    model_colors = get_model_colors()
+    
     # Configurar posiciones para las barras
     x = np.arange(len(unique_pred_types))
     bar_width = 0.8 / len(unique_models)
@@ -93,12 +126,30 @@ def plot_correct_incorrect_bar(results_df, vectorization_name, output_dir):
     # Dibujar barras para cada modelo
     for i, model in enumerate(unique_models):
         model_counts = []
+        model_colors_with_alpha = []
         for p_type in unique_pred_types:
             mask = (models == model) & (pred_types == p_type)
             # Asumimos que hay un único valor para cada combinación
             count_val = counts[mask][0] if np.any(mask) else 0
             model_counts.append(count_val)
-        plt.bar(x + i * bar_width, model_counts, width=bar_width, label=model)
+            
+            # Get the base color and add alpha
+            base_color = model_colors.get(model, '#333333')
+            r, g, b = tuple(int(base_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
+            
+            # Normalize alpha based on prediction type
+            if p_type == "Correct Predictions":
+                # For correct predictions, higher is better
+                max_correct = np.max(counts[pred_types == "Correct Predictions"]) if np.any(pred_types == "Correct Predictions") else 1
+                alpha = max(0.3, count_val / max_correct if max_correct > 0 else 0.3)
+            else:
+                # For incorrect predictions, lower is better (invert normalization)
+                max_incorrect = np.max(counts[pred_types == "Incorrect Predictions"]) if np.any(pred_types == "Incorrect Predictions") else 1
+                alpha = max(0.3, 1 - (count_val / max_incorrect if max_incorrect > 0 else 0))
+            
+            model_colors_with_alpha.append((r, g, b, alpha))
+        
+        plt.bar(x + i * bar_width, model_counts, width=bar_width, label=model, color=model_colors_with_alpha)
     
     plt.title(f"{vectorization_name} Correct vs. Incorrect Classifications", fontsize=14)
     plt.xlabel("Prediction Type", fontsize=12)
@@ -114,19 +165,13 @@ def plot_correct_incorrect_bar(results_df, vectorization_name, output_dir):
 def plot_roc_curve_by_model(X_test, y_test, output_dir):
     """
     Plots ROC curves for multiple models and their respective classes, and displays the average AUC for each model.
-    Parameters:
-    X_test (array-like): Test features.
-    y_test (array-like): True labels for the test set.
-    Description:
-    This function takes the test features and true labels, and for each model in the global `models` dictionary, it calculates the ROC curve and AUC for each class. It then plots the ROC curves for each class of each model, along with the average AUC for the model. Models that do not support the `predict_proba` method are skipped.
-    The ROC curves are plotted with the false positive rate on the x-axis and the true positive rate on the y-axis. A diagonal line representing random guessing is also plotted for reference.
-    The function displays the ROC curves using matplotlib, with each class's ROC curve labeled with its AUC, and the plot titled with the model name and its average AUC.
-    Returns:
-    None
     """
     classes = sorted(y_test.unique())
     y_test_binarized = label_binarize(y_test, classes=classes)
     model_aucs = {}
+    
+    # Get the model color dictionary
+    model_colors = get_model_colors()
 
     for model_name, model in models.items():
         if hasattr(model, "predict_proba"):
@@ -149,8 +194,18 @@ def plot_roc_curve_by_model(X_test, y_test, output_dir):
         sorted_classes = sorted(class_aucs, key=lambda x: x[3], reverse=True)
         
         plt.figure(figsize=(8, 6))
-        for class_name, fpr, tpr, roc_auc in sorted_classes:
-            plt.plot(fpr, tpr, label=f"{class_name} (AUC = {roc_auc:.2f})")
+        
+        # Get the model's assigned color
+        model_color = model_colors.get(model_name, '#333333')
+        
+        # Use different line styles for different classes but keep the same color for the model
+        line_styles = ['-', '--', '-.', ':']
+        
+        for i, (class_name, fpr, tpr, roc_auc) in enumerate(sorted_classes):
+            # Cycle through line styles if there are more classes than styles
+            line_style = line_styles[i % len(line_styles)]
+            plt.plot(fpr, tpr, label=f"{class_name} (AUC = {roc_auc:.2f})", 
+                     color=model_color, linestyle=line_style, linewidth=2)
         
         plt.plot([0, 1], [0, 1], 'k--', label="Random Guess")
         plt.xlim([0.0, 1.0])
@@ -165,19 +220,114 @@ def plot_roc_curve_by_model(X_test, y_test, output_dir):
         plt.savefig(f"{output_dir}/roc_curve_{safe_model_name}.png")
         plt.close()
 
+def plot_bacc_mcc_4panels(results_df, output_dir):
+    """
+    Lee un TSV con columnas:
+      - Classifier
+      - BACC_CV, MCC_CV
+      - BACC_Test, MCC_Test
+    y genera 4 subplots (2x2) como en la figura adjunta:
+      (a) BACC (CV)
+      (b) MCC (CV)
+      (c) BACC (Test)
+      (d) MCC (Test)
+    con degradado de color de 0 a 1 en cada barra.
+    """
+    # 1) Get model colors
+    model_colors = get_model_colors()
+    
+    # 2) Extraer columnas
+    classifiers = results_df["Model"].to_list()
+    bacc_cv     = results_df["BACC_CV"].to_list()
+    mcc_cv      = results_df["MCC_CV"].to_list()
+    bacc_test   = results_df["BACC_Test"].to_list()
+    mcc_test    = results_df["MCC_Test"].to_list()
+
+    # Create colors with alpha based on values
+    def get_color_with_alpha(base_color, value, normalize=True):
+        r, g, b = tuple(int(base_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
+        # For MCC, normalize from [-1,1] to [0,1]
+        if normalize and value < 0:
+            alpha = max(0.3, (value + 1) / 2)
+        else:
+            alpha = max(0.3, value)
+        return (r, g, b, alpha)
+
+    bacc_cv_colors = [get_color_with_alpha(model_colors.get(model, '#333333'), val) 
+                     for model, val in zip(classifiers, bacc_cv)]
+    
+    bacc_test_colors = [get_color_with_alpha(model_colors.get(model, '#333333'), val) 
+                       for model, val in zip(classifiers, bacc_test)]
+    
+    mcc_cv_colors = [get_color_with_alpha(model_colors.get(model, '#333333'), val, normalize=True) 
+                    for model, val in zip(classifiers, mcc_cv)]
+    
+    mcc_test_colors = [get_color_with_alpha(model_colors.get(model, '#333333'), val, normalize=True) 
+                      for model, val in zip(classifiers, mcc_test)]
+    
+    # 3) Eje Y (posiciones)
+    y_pos = np.arange(len(classifiers))
+
+    # 4) Crear la figura 2x2
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+
+    # -- Subplot (a) BACC (CV) --
+    axes[0, 0].barh(y_pos, bacc_cv, color=bacc_cv_colors)
+    axes[0, 0].set_yticks(y_pos)
+    axes[0, 0].set_yticklabels(classifiers)
+    axes[0, 0].invert_yaxis()  # El primer clasificador arriba
+    axes[0, 0].set_xlim([0, 1])
+    axes[0, 0].set_xlabel('BACC (CV)')
+    axes[0, 0].set_title('(a)')
+
+    # -- Subplot (b) MCC (CV) --
+    axes[0, 1].barh(y_pos, mcc_cv, color=mcc_cv_colors)
+    axes[0, 1].set_yticks(y_pos)
+    axes[0, 1].set_yticklabels(classifiers)
+    axes[0, 1].invert_yaxis()
+    # Ajustar ejes si MCC está en [-1,1] o [0,1], depende de tus valores
+    axes[0, 1].set_xlim([0, 1])
+    axes[0, 1].set_xlabel('MCC (CV)')
+    axes[0, 1].set_title('(b)')
+
+    # -- Subplot (c) BACC (Test) --
+    axes[1, 0].barh(y_pos, bacc_test, color=bacc_test_colors)
+    axes[1, 0].set_yticks(y_pos)
+    axes[1, 0].set_yticklabels(classifiers)
+    axes[1, 0].invert_yaxis()
+    axes[1, 0].set_xlim([0, 1])
+    axes[1, 0].set_xlabel('BACC (Test)')
+    axes[1, 0].set_title('(c)')
+
+    # -- Subplot (d) MCC (Test) --
+    axes[1, 1].barh(y_pos, mcc_test, color=mcc_test_colors)
+    axes[1, 1].set_yticks(y_pos)
+    axes[1, 1].set_yticklabels(classifiers)
+    axes[1, 1].invert_yaxis()
+    axes[1, 1].set_xlim([0, 1])  # Ajusta según el rango real de MCC
+    axes[1, 1].set_xlabel('MCC (Test)')
+    axes[1, 1].set_title('(d)')
+
+    plt.tight_layout()
+    # Fix: Use a generic name for the output file instead of vectorization_name
+    plt.savefig(f"{output_dir}/bacc_mcc_4panels.png")
+    plt.close()
+
+
 def results_to_df():
     """
     Converts the results of various vectorization methods and models into a polars DataFrame.
 
-    This function iterates over a nested dictionary structure `all_results` where the first level 
-    keys are vectorization methods, the second level keys are models, and the values are dictionaries 
-    of metrics. It consolidates these results into a DataFrame where each row represents a unique 
-    combination of vectorization method and model, along with their associated metrics.
+    This function loads results from disk and consolidates them into a DataFrame where each row 
+    represents a unique combination of vectorization method and model, along with their associated metrics.
 
     Returns:
         pl.DataFrame: A DataFrame where each row contains the vectorization method, model, and their 
                       corresponding metrics.
     """
+    # Load results from disk
+    all_results = load_all_results()
+    
     data = []
     for method in all_results:
         for vectorization, model_metrics in method.items():
@@ -191,6 +341,9 @@ def results_to_df():
     return pl.DataFrame(data)
 
 def best_k_accuracy():
+    # Load results from disk
+    all_results = load_all_results()
+    
     if not all_results:
         return None
 
@@ -217,6 +370,9 @@ def best_k_accuracy():
     return best_k
 
 def get_best_k():
+    # Load results from disk
+    all_results = load_all_results()
+    
     if not all_results:
         return None
     metrics_keys = ["Accuracy", "F1 Score", "AUC", "MCC"]

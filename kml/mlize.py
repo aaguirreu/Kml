@@ -1,13 +1,12 @@
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, matthews_corrcoef
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, matthews_corrcoef, balanced_accuracy_score, make_scorer
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 import polars as pl
 import numpy as np
 from .logging import log_step
-from . import all_results
 import re
 
 # Define the models to evaluate.
@@ -22,47 +21,76 @@ def train_model(X_train, y_train, model):
     model.fit(X_train, y_train)
     return model
 
-def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True):
+def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):
     """
-    Train and evaluate a model, returning metrics.
+    Train and evaluate a model using cross-validation and a test set.
 
     Parameters:
         model: The machine learning model to evaluate.
         X_train, X_test: Feature sets for training and testing.
         y_train, y_test: Labels for training and testing.
+        auc (bool): Whether to compute AUC (only valid if predict_proba is available).
+        cv (int): Number of folds for cross-validation.
 
     Returns:
-        dict: Dictionary containing evaluation metrics.
+        dict: Dictionary containing evaluation metrics for both CV and test.
+              - BACC_CV: Balanced Accuracy (CV average)
+              - MCC_CV: Matthews Corr. Coef. (CV average)
+              - BACC_Test: Balanced Accuracy (test set)
+              - MCC_Test: Matthews Corr. Coef. (test set)
+              - Accuracy, F1 Score, AUC, etc. (test set)
     """
-    # Train the model
+    # --- 1) CROSS-VALIDATION ---
+    bacc_scorer = make_scorer(balanced_accuracy_score)
+    mcc_scorer  = make_scorer(matthews_corrcoef)
+
+    # Promedio de Balanced Accuracy en CV
+    bacc_cv = cross_val_score(model, X_train, y_train, scoring=bacc_scorer, cv=cv).mean()
+    # Promedio de MCC en CV
+    mcc_cv  = cross_val_score(model, X_train, y_train, scoring=mcc_scorer, cv=cv).mean()
+
+    # --- 2) ENTRENAR MODELO FINAL en todo X_train ---
     model.fit(X_train, y_train)
 
-    # Predictions
+    # --- 3) EVALUACIÓN en TEST ---
     y_pred = model.predict(X_test)
     y_pred_proba = model.predict_proba(X_test) if hasattr(model, "predict_proba") else None
 
-    # Metrics
-    accuracy = accuracy_score(y_test, y_pred)
-    f1 = f1_score(y_test, y_pred, average='weighted')
-    mcc = matthews_corrcoef(y_test, y_pred)
-    
-    # AUC (if probabilities available)
-    if auc:
-        if y_pred_proba is not None:
-            if y_pred_proba.shape[1] == 2:  # Binary classification
-                y_pred_proba = y_pred_proba[:, 1]  # Use probabilities for the positive class
-            auc_score = roc_auc_score(y_test, y_pred_proba, multi_class='ovr' if len(np.unique(y_test)) > 2 else None)
-        else:
-            auc_score = None
+    # Métricas en test
+    accuracy_test = accuracy_score(y_test, y_pred)
+    bacc_test     = balanced_accuracy_score(y_test, y_pred)
+    f1_test       = f1_score(y_test, y_pred, average='weighted')
+    mcc_test      = matthews_corrcoef(y_test, y_pred)
 
-    correct_predictions = np.sum(np.array(y_test) == np.array(y_pred))
-    incorrect_predictions = len(y_test) - correct_predictions
+    # AUC en test (si procede)
+    auc_score_test = None
+    if auc and y_pred_proba is not None:
+        if y_pred_proba.shape[1] == 2:
+            # Para binario, usar la prob. de la clase positiva
+            y_pred_proba = y_pred_proba[:, 1]
+        auc_score_test = roc_auc_score(
+            y_test,
+            y_pred_proba,
+            multi_class='ovr' if len(np.unique(y_test)) > 2 else None
+        )
 
+    correct_predictions    = np.sum(np.array(y_test) == np.array(y_pred))
+    incorrect_predictions  = len(y_test) - correct_predictions
+
+    # --- 4) RETORNAR RESULTADOS ---
     return {
-        'Accuracy': accuracy,
-        'F1 Score': f1,
-        'AUC': auc_score,
-        'MCC': mcc,
+        # -- CV Metrics --
+        'BACC_CV': bacc_cv,
+        'MCC_CV': mcc_cv,
+
+        # -- Test Metrics --
+        'BACC_Test': bacc_test,
+        'MCC_Test': mcc_test,
+
+        'Accuracy': accuracy_test,
+        'F1 Score': f1_test,
+        'AUC': auc_score_test,
+
         'Correct Predictions': correct_predictions,
         'Incorrect Predictions': incorrect_predictions
     }
