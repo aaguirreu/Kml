@@ -3,6 +3,7 @@ import json
 import tempfile
 import numpy as np
 import joblib
+import polars as pl
 from typing import Dict, List, Any
 
 # Directory to store temporary results
@@ -88,4 +89,50 @@ def save_model(vectorization_name: str, model_name: str, model, output_dir: str)
     
     # Save the model to disk
     joblib.dump(model, filepath)
+    return filepath
+
+def save_prediction_results(vectorization_name: str, model_name: str, 
+                          file_names, true_labels, predicted_labels, output_dir: str):
+    """
+    Save prediction results to a CSV file with format:
+    - accession: The original file accession ID
+    - true_species: The actual species label
+    - predicted_species: The species predicted by the model
+    - correct_prediction: Boolean indicating if the prediction was correct
+    
+    Parameters:
+        vectorization_name: Name of the vectorization method
+        model_name: Name of the model
+        file_names: Array of file names/accessions for the test samples
+        true_labels: Array of true species labels
+        predicted_labels: Array of predicted species labels
+        output_dir: Directory where to save the CSV
+    """
+    # Create safe filenames by replacing spaces and special characters
+    safe_vectorization = vectorization_name.replace(" ", "_")
+    safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
+    
+    # Generate filename with pattern: vectorization_model_predictions.csv
+    filename = f"{safe_vectorization}_{safe_model_name}_predictions.csv"
+    filepath = os.path.join(output_dir, filename)
+    
+    # Extract accessions from file names (assuming format like "prefix_accession_...")
+    accessions = []
+    for file in file_names:
+        parts = str(file).split('_')
+        if len(parts) >= 2:
+            accessions.append(parts[0] + "_" + parts[1])  # Take first two parts as accession
+        else:
+            accessions.append(file)  # Use whole filename if it doesn't match expected format
+    
+    # Create DataFrame with results
+    df = pl.DataFrame({
+        "accession": accessions,
+        "true_species": true_labels,
+        "predicted_species": predicted_labels,
+        "correct_prediction": [t == p for t, p in zip(true_labels, predicted_labels)]
+    })
+    
+    # Save to CSV
+    df.write_csv(filepath)
     return filepath

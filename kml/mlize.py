@@ -34,14 +34,9 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):  # 
         cv (int): Number of folds for cross-validation.
 
     Returns:
-        dict: Dictionary containing evaluation metrics for both CV and test.
-              - BACC_CV: Balanced Accuracy (CV average)
-              - MCC_CV: Matthews Corr. Coef. (CV average)
-              - BACC_Test: Balanced Accuracy (test set)
-              - MCC_Test: Matthews Corr. Coef. (test set)
-              - Accuracy, F1 Score, AUC, etc. (test set)
-              - Training Time: Time taken to train the model (seconds)
-              - Prediction Time: Time taken to make predictions (seconds)
+        tuple: (metrics_dict, prediction_details)
+        - metrics_dict: Dictionary containing evaluation metrics
+        - prediction_details: Dictionary with 'true_labels' and 'predicted_labels'
     """
     # --- 1) CROSS-VALIDATION ---
     bacc_scorer = make_scorer(balanced_accuracy_score)
@@ -93,8 +88,8 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):  # 
     correct_predictions    = np.sum(np.array(y_test) == np.array(y_pred))
     incorrect_predictions  = len(y_test) - correct_predictions
 
-    # --- 4) RETORNAR RESULTADOS ---
-    return {
+    # --- 4) RETURN RESULTS ---
+    metrics = {
         # -- CV Metrics --
         'BACC_CV': bacc_cv,
         'MCC_CV': mcc_cv,
@@ -115,31 +110,31 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):  # 
         'Training Time': training_time,
         'Prediction Time': prediction_time
     }
+    
+    # Prepare prediction details for saving to CSV
+    prediction_details = {
+        'true_labels': y_test,
+        'predicted_labels': y_pred
+    }
+    
+    return metrics, prediction_details
 
 def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value=None):
     # Data Preparation
     X = df[:, 2:]  # Assuming k-mer counts start from the 3rd column
     y = df['specie']
     
-    # # Print class distribution before splitting
-    # print("Class distribution before splitting:")
-    # print(y.value_counts())
-
+    # Store original rows (with 'file' column) for later matching
+    original_files = df['file']
+    
     # Normalize k-mer counts
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
     # Train-test split (you might want to stratify to preserve class proportions)
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_scaled, y, test_size=0.2, random_state=42, stratify=y
+    X_train, X_test, y_train, y_test, indices_train, indices_test = train_test_split(
+        X_scaled, y, np.arange(len(y)), test_size=0.2, random_state=42, stratify=y
     )
-    
-    # Print sizes and distributions after splitting
-    # print(f"Training set size: {len(y_train)}, Test set size: {len(y_test)}\n")
-    # print("Training set class distribution:")
-    # print(pl.Series(y_train).value_counts(),"\n")
-    # print("Test set class distribution:")
-    # print(pl.Series(y_test).value_counts(),"\n")
     
     # Create a deep copy of the models dictionary to prevent modifying the original
     models_copy = {
@@ -149,6 +144,12 @@ def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value
     }
     
     local_results = {}
+    
+    # Map to store test indices for each model
+    test_indices_by_model = {}
+    # Map to store prediction details for each model
+    prediction_details_by_model = {}
+    
     for model_name, model_template in models_copy.items():
         log_step(f"Starting evaluation for model: {model_name}.")
         
@@ -160,19 +161,36 @@ def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value
         # Create a fresh instance for each evaluation
         try:
             model = model_template.__class__(**model_template.get_params())
-            results = evaluate_model(model, X_train, X_test, y_train, y_test, cv=cv_folds)
+            metrics, prediction_details = evaluate_model(model, X_train, X_test, y_train, y_test, cv=cv_folds)
+            
+            # Store prediction details for this model
+            prediction_details_by_model[model_name] = prediction_details
+            # Store test indices for this model
+            test_indices_by_model[model_name] = indices_test
             
             # Add k value to results explicitly
             if k_value is not None:
-                results['K-mer'] = k_value
+                metrics['K-mer'] = k_value
                 
-            local_results[model_name] = results
+            local_results[model_name] = metrics
             
             # Save model immediately after evaluation if output_dir is provided
             if output_dir and vectorization_name:
-                from .disk_storage import save_model
+                from .disk_storage import save_model, save_prediction_results
                 model_path = save_model(vectorization_name, model_name, model, output_dir)
                 log_step(f"Model saved to: {model_path}")
+                
+                # Save prediction results to CSV
+                files_test = original_files.to_numpy()[indices_test]
+                save_prediction_results(
+                    vectorization_name,
+                    model_name,
+                    files_test,
+                    prediction_details['true_labels'],
+                    prediction_details['predicted_labels'],
+                    output_dir
+                )
+                log_step(f"Prediction results saved to CSV for {model_name}")
                 
                 # Force cleanup - Only clear the local reference, not the template
                 model = None
