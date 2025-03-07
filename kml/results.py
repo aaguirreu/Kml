@@ -36,7 +36,7 @@ def plot_grouped_bar(results_df, vectorization_name, output_dir):
         id_vars='Model',
         variable_name='Metric',
         value_name='Score'
-    ).filter(~pl.col("Metric").is_in(["Correct Predictions", "Incorrect Predictions", "K-mer"]))
+    ).filter(pl.col("Metric").is_in(["Accuracy", "AUC", "F1 Score"]))
     
     # Convertir cada columna a array de NumPy
     models = results_melted["Model"].to_numpy()
