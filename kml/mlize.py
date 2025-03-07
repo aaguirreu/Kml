@@ -8,6 +8,7 @@ import polars as pl
 import numpy as np
 from .logging import log_step
 import re
+import time  # Add time module import
 
 # Define the models to evaluate.
 models = {
@@ -21,7 +22,7 @@ def train_model(X_train, y_train, model):
     model.fit(X_train, y_train)
     return model
 
-def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):
+def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):  # Changed default from 5 to 3
     """
     Train and evaluate a model using cross-validation and a test set.
 
@@ -39,34 +40,49 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):
               - BACC_Test: Balanced Accuracy (test set)
               - MCC_Test: Matthews Corr. Coef. (test set)
               - Accuracy, F1 Score, AUC, etc. (test set)
+              - Training Time: Time taken to train the model (seconds)
+              - Prediction Time: Time taken to make predictions (seconds)
     """
     # --- 1) CROSS-VALIDATION ---
     bacc_scorer = make_scorer(balanced_accuracy_score)
     mcc_scorer  = make_scorer(matthews_corrcoef)
 
-    # Promedio de Balanced Accuracy en CV
-    bacc_cv = cross_val_score(model, X_train, y_train, scoring=bacc_scorer, cv=cv).mean()
-    # Promedio de MCC en CV
-    mcc_cv  = cross_val_score(model, X_train, y_train, scoring=mcc_scorer, cv=cv).mean()
+    # Track cross-validation time
+    cv_start_time = time.time()
+    # Average of Balanced Accuracy in CV - use parallel processing with n_jobs=-1
+    bacc_cv = cross_val_score(model, X_train, y_train, scoring=bacc_scorer, cv=cv, n_jobs=-1).mean()
+    # Average of MCC in CV - use parallel processing with n_jobs=-1
+    mcc_cv  = cross_val_score(model, X_train, y_train, scoring=mcc_scorer, cv=cv, n_jobs=-1).mean()
+    cv_time = time.time() - cv_start_time
 
-    # --- 2) ENTRENAR MODELO FINAL en todo X_train ---
+    # --- 2) TRAIN FINAL MODEL on all X_train ---
+    start_time = time.time()
     model.fit(X_train, y_train)
+    training_time = time.time() - start_time
 
-    # --- 3) EVALUACIÓN en TEST ---
+    # --- 3) EVALUATION on TEST ---
+    start_time = time.time()
     y_pred = model.predict(X_test)
+    prediction_time = time.time() - start_time
+    
+    start_time = time.time()
     y_pred_proba = model.predict_proba(X_test) if hasattr(model, "predict_proba") else None
+    proba_time = time.time() - start_time
+    # Add proba time to prediction time if available
+    if y_pred_proba is not None:
+        prediction_time += proba_time
 
-    # Métricas en test
+    # Test metrics
     accuracy_test = accuracy_score(y_test, y_pred)
     bacc_test     = balanced_accuracy_score(y_test, y_pred)
     f1_test       = f1_score(y_test, y_pred, average='weighted')
     mcc_test      = matthews_corrcoef(y_test, y_pred)
 
-    # AUC en test (si procede)
+    # AUC in test (if applicable)
     auc_score_test = None
     if auc and y_pred_proba is not None:
         if y_pred_proba.shape[1] == 2:
-            # Para binario, usar la prob. de la clase positiva
+            # For binary, use the prob. of the positive class
             y_pred_proba = y_pred_proba[:, 1]
         auc_score_test = roc_auc_score(
             y_test,
@@ -82,6 +98,7 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):
         # -- CV Metrics --
         'BACC_CV': bacc_cv,
         'MCC_CV': mcc_cv,
+        'CV Time': cv_time,  # Add CV time to results
 
         # -- Test Metrics --
         'BACC_Test': bacc_test,
@@ -92,10 +109,14 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):
         'AUC': auc_score_test,
 
         'Correct Predictions': correct_predictions,
-        'Incorrect Predictions': incorrect_predictions
+        'Incorrect Predictions': incorrect_predictions,
+        
+        # -- Time Metrics --
+        'Training Time': training_time,
+        'Prediction Time': prediction_time
     }
 
-def run_models(df):
+def run_models(df, cv_folds=3):  # Add cv_folds parameter with default value of 3
     # Data Preparation
     X = df[:, 2:]  # Assuming k-mer counts start from the 3rd column
     y = df['specie']
@@ -122,7 +143,7 @@ def run_models(df):
     local_results = {}
     for model_name, model in models.items():
         log_step(f"Starting evaluation for model: {model_name}.")
-        results = evaluate_model(model, X_train, X_test, y_train, y_test)
+        results = evaluate_model(model, X_train, X_test, y_train, y_test, cv=cv_folds)
         local_results[model_name] = results
         # print(f"Results for {model_name}:")
         # for metric_name, value in results.items():

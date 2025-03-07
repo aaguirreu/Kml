@@ -26,12 +26,12 @@ def get_cmap_norm():
     return cmap, norm
 
 def prepare_plot_df(results_dict):
-    # Convierte el diccionario de métricas en una DataFrame usando polars
+    # Convert the metrics dictionary into a DataFrame using polars
     df = pl.DataFrame([{"Model": k, **v} for k, v in results_dict.items()])
     return df
 
 def plot_grouped_bar(results_df, vectorization_name, output_dir):
-    # Realiza el melt usando Polars (queda como Polars DataFrame)
+    # Perform melt using Polars (remains as Polars DataFrame)
     results_melted = results_df.melt(
         id_vars='Model',
         variable_name='Metric',
@@ -71,7 +71,8 @@ def plot_grouped_bar(results_df, vectorization_name, output_dir):
             base_color = model_colors.get(model, '#333333')
             # Convert hex to RGBA and set alpha based on score
             r, g, b = tuple(int(base_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
-            alpha = max(0.3, score)  # Minimum alpha of 0.3 to ensure visibility
+            # Ensure alpha is within 0-1 range
+            alpha = max(0.3, min(1.0, score))  # Minimum alpha of 0.3, maximum of 1.0
             model_colors_with_alpha.append((r, g, b, alpha))
         
         plt.bar(x + i * bar_width, model_scores, width=bar_width, label=model, color=model_colors_with_alpha)
@@ -88,16 +89,16 @@ def plot_grouped_bar(results_df, vectorization_name, output_dir):
 
 def plot_correct_incorrect_bar(results_df, vectorization_name, output_dir):
     """
-    Genera un gráfico de barras comparando las predicciones correctas e incorrectas,
-    extrayendo los datos directamente de un DataFrame de Polars.
+    Generates a bar chart comparing correct and incorrect predictions,
+    extracting data directly from a Polars DataFrame.
 
     Parameters:
-        results_df (pl.DataFrame): DataFrame de Polars con columnas 'Model',
-            'Correct Predictions' e 'Incorrect Predictions'.
-        vectorization_name (str): Nombre de la técnica de vectorización (para el título del gráfico).
-        output_dir (str): Directorio donde se guardará el gráfico.
+        results_df (pl.DataFrame): Polars DataFrame with columns 'Model',
+            'Correct Predictions' and 'Incorrect Predictions'.
+        vectorization_name (str): Name of the vectorization technique (for the chart title).
+        output_dir (str): Directory where the chart will be saved.
     """
-    # Realiza el melt con Polars
+    # Perform melt with Polars
     df_melted = results_df.melt(
         id_vars="Model",
         value_vars=["Correct Predictions", "Incorrect Predictions"],
@@ -137,15 +138,15 @@ def plot_correct_incorrect_bar(results_df, vectorization_name, output_dir):
             base_color = model_colors.get(model, '#333333')
             r, g, b = tuple(int(base_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
             
-            # Normalize alpha based on prediction type
+            # Normalize alpha based on prediction type and ensure it's within 0-1 range
             if p_type == "Correct Predictions":
                 # For correct predictions, higher is better
                 max_correct = np.max(counts[pred_types == "Correct Predictions"]) if np.any(pred_types == "Correct Predictions") else 1
-                alpha = max(0.3, count_val / max_correct if max_correct > 0 else 0.3)
+                alpha = max(0.3, min(1.0, count_val / max_correct if max_correct > 0 else 0.3))
             else:
                 # For incorrect predictions, lower is better (invert normalization)
                 max_incorrect = np.max(counts[pred_types == "Incorrect Predictions"]) if np.any(pred_types == "Incorrect Predictions") else 1
-                alpha = max(0.3, 1 - (count_val / max_incorrect if max_incorrect > 0 else 0))
+                alpha = max(0.3, min(1.0, 1 - (count_val / max_incorrect if max_incorrect > 0 else 0)))
             
             model_colors_with_alpha.append((r, g, b, alpha))
         
@@ -248,9 +249,9 @@ def plot_bacc_mcc_4panels(results_df, output_dir):
         r, g, b = tuple(int(base_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
         # For MCC, normalize from [-1,1] to [0,1]
         if normalize and value < 0:
-            alpha = max(0.3, (value + 1) / 2)
+            alpha = max(0.3, min(1.0, (value + 1) / 2))
         else:
-            alpha = max(0.3, value)
+            alpha = max(0.3, min(1.0, value))  # Ensure alpha is within 0-1 range
         return (r, g, b, alpha)
 
     bacc_cv_colors = [get_color_with_alpha(model_colors.get(model, '#333333'), val) 

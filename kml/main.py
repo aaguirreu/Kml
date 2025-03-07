@@ -89,15 +89,15 @@ Examples:
                         help='Path to a directory containing sequence files')
     parser.add_argument('-o', '--output_dir', type=str, required=True,
                         help='Directory for output files')
-    # Nueva flag para escoger los modelos deseados: ejemplo: RF,LR,SVM
+    # New flag to choose desired models: example: RF,LR,SVM
     parser.add_argument('-m', '--models', type=str, help='Comma-separated list of models to evaluate: RF,LR,SVM')
     parser.add_argument('-va', '--vectorization-all', action='store_true',
                        help='Use all available vectorization methods')
     parser.add_argument('-ma', '--models-all', action='store_true',
                        help='Use all available models')
-    # Agregar nuevo argumento --specie-csv
+    # Add new argument --specie-csv
     parser.add_argument('--specie-csv', type=str, help="CSV file with columns 'accession' and 'species'")
-    # Agregar nuevo flag --ctr
+    # Add new flag --ctr
     parser.add_argument('--ctr', action='store_true', help="If true, run kmertools kml counting subprocess")
     args = parser.parse_args()
 
@@ -106,11 +106,11 @@ Examples:
         log_step("No execution condition met. Provide either --ctr or both --models and --vectorization. Exiting.")
         sys.exit(0)
 
-    # Si se especifica la flag --models o --models-all, filtrar el diccionario de modelos
+    # If the --models flag or --models-all is specified, filter the models dictionary
     if args.models or args.models_all:
         if args.models_all:
             log_step("Using all available models.")
-            # No hacemos nada, dejamos models como está
+            # We do nothing, leave models as is
         else:
             code_to_name = {
                 "RF": "Random Forest",
@@ -126,17 +126,17 @@ Examples:
                 else:
                     log_step(f"Warning: Unknown model code '{code}'")
             
-            if new_models:  # Solo actualizar si se encontraron modelos válidos
+            if new_models:  # Only update if valid models were found
                 models.clear()
                 models.update(new_models)
             else:
                 log_step("No valid models selected. Using all available models.")
 
-    # Procesar los métodos de vectorización seleccionados
+    # Process the selected vectorization methods
     if args.vectorization or args.vectorization_all:
         if args.vectorization_all:
             log_step("Using all available vectorization methods.")
-            # No hacemos nada, dejamos vectorization_methods como está
+            # We do nothing, leave vectorization_methods as is
         else:
             code_to_name = {
                 "KMER": "K-mer Frequency",
@@ -154,7 +154,7 @@ Examples:
                 else:
                     log_step(f"Warning: Unknown vectorization method '{method}'")
             
-            if new_methods:  # Solo actualizar si se encontraron métodos válidos
+            if new_methods:  # Only update if valid methods were found
                 vectorization_methods.clear()
                 vectorization_methods.update(new_methods)
             else:
@@ -181,7 +181,7 @@ Examples:
     # valid_extensions = ('.fasta', '.fna', '.fa', '.fastq', '.gz')
     if args.file:
         input_source = args.file
-        if args.vectorization:  # Ahora esto comprueba si hay una cadena, no un booleano
+        if args.vectorization:  # Now this checks if there is a string, not a boolean
             if not input_source.endswith('.tsv') or '-mer' not in input_source:
                 log_step("In vectorization mode, the input file must be a .tsv file generated with k-mers (containing '-mer' in the name).")
                 sys.exit(1)
