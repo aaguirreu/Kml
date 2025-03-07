@@ -2,6 +2,7 @@ import os
 import json
 import tempfile
 import numpy as np
+import joblib
 from typing import Dict, List, Any
 
 # Directory to store temporary results
@@ -66,3 +67,25 @@ def clear_results():
     for filename in os.listdir(TEMP_DIR):
         if filename.endswith('.json'):
             os.remove(os.path.join(TEMP_DIR, filename))
+
+def save_model(vectorization_name: str, model_name: str, model, output_dir: str):
+    """
+    Save a trained model to disk with filename format: vectorization_model.joblib
+    
+    Parameters:
+        vectorization_name: Name of the vectorization method
+        model_name: Name of the model
+        model: Trained model object
+        output_dir: Directory where to save the model
+    """
+    # Create safe filenames by replacing spaces and special characters
+    safe_vectorization = vectorization_name.replace(" ", "_")
+    safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
+    
+    # Generate filename with pattern: vectorization_model.joblib
+    filename = f"{safe_vectorization}_{safe_model_name}.joblib"
+    filepath = os.path.join(output_dir, filename)
+    
+    # Save the model to disk
+    joblib.dump(model, filepath)
+    return filepath

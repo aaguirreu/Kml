@@ -6,7 +6,7 @@ from .logging import log_memory_usage, log_step, log_results
 from .mlize import extract_species_from_filename, extract_species_from_csv, run_models
 from .vectorize import vectorization_methods
 from . import __date__
-from .disk_storage import save_result, clear_results
+from .disk_storage import save_result, clear_results, save_model
 from .results import plot_grouped_bar, plot_roc_curve_by_model, results_to_df, plot_correct_incorrect_bar, plot_bacc_mcc_4panels, prepare_plot_df, best_k_accuracy
 import polars as pl
 
@@ -23,12 +23,10 @@ def evaluate_all_vectorizations(k, df, output_dir):
     """
     # Track total times for final summary
     total_vectorization_time = 0
-    total_cv_time = 0  # Add tracking for cross-validation time
     total_training_time = 0
     total_prediction_time = 0
-    total_save_results_time = 0
-    total_plotting_time = 0
     total_models_count = 0
+    total_cv_time = 0
     
     for vectorization_name, vectorization_function in vectorization_methods.items():
         # log_memory_usage()
@@ -46,7 +44,13 @@ def evaluate_all_vectorizations(k, df, output_dir):
         log_step(f"Vectorization time for {vectorization_name}: {vectorization_time:.4f} seconds")
         
         log_step(f"Running models for {vectorization_name}")
-        X_train, X_test, y_train, y_test, model_results = run_models(vectorized_data)
+        # Pass output_dir and vectorization_name to run_models so it can save models
+        X_train, X_test, y_train, y_test, model_results = run_models(
+            vectorized_data, 
+            output_dir=output_dir, 
+            vectorization_name=vectorization_name,
+            k_value=k  # Explicitly pass k value to run_models
+        )
         
         # Track training and prediction times for summary
         for model_name, metrics in model_results.items():
@@ -62,28 +66,21 @@ def evaluate_all_vectorizations(k, df, output_dir):
             
             # Log the complete model processing time
             log_step(f"Model: {model_name} - Complete Processing Time: {total_model_time:.4f}s")
-            log_step(f"  ├─ Cross-Validation Time: {metrics.get('CV Time', 0):.4f}s")  # Add CV time to logs
+            log_step(f"  ├─ Cross-Validation Time: {metrics.get('CV Time', 0):.4f}s")
             log_step(f"  ├─ Training Time: {metrics.get('Training Time', 0):.4f}s")
             log_step(f"  └─ Prediction Time: {metrics.get('Prediction Time', 0):.4f}s")
             
             # Add the complete model time to metrics
             metrics['Complete Model Time'] = total_model_time
         
-        # Add vectorization time to each model's results
-        model_results = {
-            model_name: {
-                'K-mer': k, 
-                'Vectorization Time': vectorization_time,
-                **metrics
-            }
-            for model_name, metrics in model_results.items()
-        }
+        # Add k-mer value to results explicitly - ensure each model has the k value
+        for model_name in model_results:
+            model_results[model_name]['K-mer'] = k
         
-        # Track time spent on saving results to disk
+        # Save results and create plots
         save_result(vectorization_name, model_results)
         plot_df = prepare_plot_df(model_results)
         plot_grouped_bar(plot_df, vectorization_name, output_dir)
-        # plot_roc_curve_by_model(X_test, y_test, output_dir)
         plot_correct_incorrect_bar(plot_df, vectorization_name, output_dir)
 
 def filter_single_sample_classes(df: pl.DataFrame) -> pl.DataFrame:
@@ -114,11 +111,8 @@ def run_all(args, input_source, k_range):
     """
 
     # Track specific operation times
-    io_time = 0
-    preprocessing_time = 0
-    plotting_time = 0
     model_time = 0
-    kmertools_time = 0  # Add tracking for kmertools execution time
+    kmertools_time = 0
     
     # Clear previous results at the beginning
     clear_results()
@@ -152,21 +146,16 @@ def run_all(args, input_source, k_range):
             try:
                 log_step(f"Reading {k}-mer file {output_filepath}")
                 # Time file reading
-                io_start = time.time()
                 df = pl.read_csv(output_filepath, separator='\t')
                 # Force evaluation of the DataFrame to get accurate timing
                 df_shape = df.shape
-                io_end = time.time()
-                io_time += io_end - io_start
-                log_step(f"File read time: {io_end - io_start:.4f} seconds, DataFrame shape: {df_shape}")
+                log_step(f"DataFrame shape: {df_shape}")
             except Exception as e:
                 log_step(f"Failed to read the file '{output_filepath}'. Error details: {e}")
                 continue
 
             try:
                 # Extraer taxonomía a partir de la columna "file"
-                preprocessing_start = time.time()
-                
                 if args.specie_csv:
                     log_step(f"Extracting species from CSV file {args.specie_csv}")
                     df_species = pl.read_csv(args.specie_csv, separator=',', columns=['accession', 'species'])
@@ -186,10 +175,6 @@ def run_all(args, input_source, k_range):
                 log_step("Filtering classes with less than 3 samples")
                 df = filter_single_sample_classes(df)
                 
-                preprocessing_end = time.time()
-                preprocessing_time += preprocessing_end - preprocessing_start
-                log_step(f"Preprocessing time: {preprocessing_end - preprocessing_start:.4f} seconds")
-                
                 # Track vectorization and model times separately
                 log_step(f"Initiating vectorization for {k}-mer")
                 process_start = time.time()
@@ -208,50 +193,50 @@ def run_all(args, input_source, k_range):
     # Determinar el mejor k usando la función auxiliar
     if using_vectorization:
         try:
-            best_k = best_k_accuracy()
-            if best_k is not None:
-                log_results(args.output_dir, input_source, best_k, k_range)
-            else:
-                log_step("Could not determine best k-mer size. Using default.")
-                best_k = list(k_range)[-1] if k_range else None
-                
-            # Generate the metrics file
+            # Generate the metrics file first
             metrics_output_filepath = os.path.join(args.output_dir, 'performance_metrics.tsv')
             try:
-                # Time for generating metrics and plotting
-                post_process_start = time.time()
-                
                 # Get results from disk using results_to_df
                 results_df = results_to_df()
                 if not results_df.is_empty():
-                    # Calculate time totals across all results    
+                    # Verify K-mer column exists in results
+                    if "K-mer" not in results_df.columns:
+                        log_step("Warning: K-mer column not found in results. This indicates a problem with result tracking.")
+                        # Instead of adding a fixed value, log the missing information
+                        log_step("Please check that k values are being correctly passed to models.")
+                        
+                        # If we still need the file to be created, add the k values but with a clear warning
+                        results_df = results_df.with_columns(
+                            pl.lit(None).cast(pl.Int64).alias("K-mer")
+                        )
+                        log_step("Added placeholder K-mer column with null values.")
                     
                     # Save the DataFrame to a TSV file
-                    io_start = time.time()
                     results_df.write_csv(metrics_output_filepath, separator='\t')
-                    io_end = time.time()
-                    io_time += io_end - io_start
                     log_step(f"Performance metrics have been successfully saved to {metrics_output_filepath}")
                     
-                    # Generate the summary plot
-                    plotting_start = time.time()
+                    # Now determine best k
+                    best_k = best_k_accuracy()
+                    if best_k is not None:
+                        log_results(args.output_dir, input_source, best_k, k_range)
+                    else:
+                        log_step("Could not determine best k-mer size. Using default.")
+                        best_k = list(k_range)[-1] if k_range else None
+                        log_results(args.output_dir, input_source, best_k, k_range)
+                    
                     try:
                         plot_bacc_mcc_4panels(results_df, args.output_dir)
                         log_step("Successfully generated BACC/MCC 4-panel plot")
                     except Exception as e:
                         log_step(f"Error generating BACC/MCC plot: {str(e)}")
-                    plotting_end = time.time()
-                    plotting_time += plotting_end - plotting_start
                     
-                    post_process_end = time.time()
-                    post_process_time = post_process_end - post_process_start
-                    log_step(f"Post-processing time: {post_process_time:.2f} seconds")
                 else:
                     log_step("No results available to save to metrics file")
             except Exception as e:
                 log_step(f"An error occurred while saving the performance metrics file: {str(e)}")
                 import traceback
                 traceback.print_exc()
+                
         except Exception as e:
             log_step(f"Error in final result processing: {str(e)}")
             import traceback

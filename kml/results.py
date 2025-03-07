@@ -328,8 +328,15 @@ def results_to_df():
     """
     # Load results from disk
     all_results = load_all_results()
+    from .logging import log_step
+    
+    if not all_results:
+        log_step("No results found in disk storage.")
+        return pl.DataFrame()
     
     data = []
+    missing_k = 0
+    
     for method in all_results:
         for vectorization, model_metrics in method.items():
             for model_name, metrics in model_metrics.items():
@@ -337,38 +344,85 @@ def results_to_df():
                     "Vectorization": vectorization,
                     "Model": model_name
                 }
+                
+                # Check if K-mer exists in metrics
+                if "K-mer" not in metrics:
+                    missing_k += 1
+                    log_step(f"Missing K-mer in results for {vectorization} - {model_name}")
+                
                 row.update(metrics)
                 data.append(row)
+    
+    if missing_k > 0:
+        log_step(f"Warning: {missing_k} results missing K-mer information. This might affect best_k_accuracy calculations.")
+    
     return pl.DataFrame(data)
 
 def best_k_accuracy():
+    """
+    Finds the k-mer size with the highest average accuracy across all models and vectorizations.
+    Handles cases where the 'K-mer' key might be missing in some results.
+    
+    Returns:
+        int or None: The best k-mer size, or None if no valid results found
+    """
     # Load results from disk
     all_results = load_all_results()
     
     if not all_results:
         return None
 
+    from .logging import log_step
+    
     k_accuracy = {}
+    skipped = 0
     
     for item in all_results:
         for vectorization_method, models in item.items():
             for model_name, metrics in models.items():
-                k_val = metrics["K-mer"]
-                accuracy = metrics["Accuracy"]
-                
-                if k_val not in k_accuracy:
-                    k_accuracy[k_val] = {"total": 0.0, "count": 0}
-                
-                k_accuracy[k_val]["total"] += accuracy
-                k_accuracy[k_val]["count"] += 1
-
-    # Se calcula el promedio y se selecciona el k con mayor accuracy promedio.
-    best_k = max(
-        k_accuracy.items(),
-        key=lambda x: x[1]["total"] / x[1]["count"] if x[1]["count"] > 0 else float('-inf')
-    )[0]
+                try:
+                    # Check if K-mer exists in the metrics
+                    if "K-mer" not in metrics:
+                        skipped += 1
+                        continue
+                        
+                    k_val = metrics["K-mer"]
+                    
+                    # Also check if Accuracy exists
+                    if "Accuracy" not in metrics:
+                        skipped += 1
+                        continue
+                        
+                    accuracy = metrics["Accuracy"]
+                    
+                    if k_val not in k_accuracy:
+                        k_accuracy[k_val] = {"total": 0.0, "count": 0}
+                    
+                    k_accuracy[k_val]["total"] += accuracy
+                    k_accuracy[k_val]["count"] += 1
+                except Exception as e:
+                    skipped += 1
+                    log_step(f"Warning: Skipped a result when determining best K. Error: {str(e)}")
     
-    return best_k
+    if skipped > 0:
+        log_step(f"Warning: Skipped {skipped} results when determining best K.")
+    
+    if not k_accuracy:
+        log_step("No valid K-mer results found to determine best K.")
+        return None
+        
+    # Calculate average accuracy for each k value and select the best
+    try:
+        best_k = max(
+            k_accuracy.items(),
+            key=lambda x: x[1]["total"] / x[1]["count"] if x[1]["count"] > 0 else float('-inf')
+        )[0]
+        log_step(f"Best K-mer determined: {best_k}")
+        return best_k
+    except Exception as e:
+        log_step(f"Error calculating best K: {str(e)}")
+        # Return the first K if we can't determine the best one
+        return next(iter(k_accuracy.keys())) if k_accuracy else None
 
 def get_best_k():
     # Load results from disk

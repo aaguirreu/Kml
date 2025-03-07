@@ -116,7 +116,7 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):  # 
         'Prediction Time': prediction_time
     }
 
-def run_models(df, cv_folds=3):  # Add cv_folds parameter with default value of 3
+def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value=None):
     # Data Preparation
     X = df[:, 2:]  # Assuming k-mer counts start from the 3rd column
     y = df['specie']
@@ -140,16 +140,47 @@ def run_models(df, cv_folds=3):  # Add cv_folds parameter with default value of 
     # print(pl.Series(y_train).value_counts(),"\n")
     # print("Test set class distribution:")
     # print(pl.Series(y_test).value_counts(),"\n")
+    
+    # Create a deep copy of the models dictionary to prevent modifying the original
+    models_copy = {
+        'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
+        'Logistic Regression': LogisticRegression(max_iter=1000, random_state=42),
+        'Support Vector Machine (RBF Kernel)': SVC(kernel='rbf', probability=True, random_state=42),
+    }
+    
     local_results = {}
-    for model_name, model in models.items():
+    for model_name, model_template in models_copy.items():
         log_step(f"Starting evaluation for model: {model_name}.")
-        results = evaluate_model(model, X_train, X_test, y_train, y_test, cv=cv_folds)
-        local_results[model_name] = results
-        # print(f"Results for {model_name}:")
-        # for metric_name, value in results.items():
-        #     if value is not None:
-        #         print(f"  {metric_name}: {value:.4f}")
-        # print("-" * 40)
+        
+        # Make sure we have a valid model instance
+        if model_template is None:
+            log_step(f"Error: Model {model_name} is not available. Skipping.")
+            continue
+            
+        # Create a fresh instance for each evaluation
+        try:
+            model = model_template.__class__(**model_template.get_params())
+            results = evaluate_model(model, X_train, X_test, y_train, y_test, cv=cv_folds)
+            
+            # Add k value to results explicitly
+            if k_value is not None:
+                results['K-mer'] = k_value
+                
+            local_results[model_name] = results
+            
+            # Save model immediately after evaluation if output_dir is provided
+            if output_dir and vectorization_name:
+                from .disk_storage import save_model
+                model_path = save_model(vectorization_name, model_name, model, output_dir)
+                log_step(f"Model saved to: {model_path}")
+                
+                # Force cleanup - Only clear the local reference, not the template
+                model = None
+                import gc
+                gc.collect()
+        except Exception as e:
+            log_step(f"Error evaluating model {model_name}: {str(e)}")
+            continue
 
     return X_train, X_test, y_train, y_test, local_results
 
