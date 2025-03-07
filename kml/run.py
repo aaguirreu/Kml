@@ -80,39 +80,11 @@ def evaluate_all_vectorizations(k, df, output_dir):
         }
         
         # Track time spent on saving results to disk
-        save_start = time.time()
         save_result(vectorization_name, model_results)
-        save_end = time.time()
-        save_results_time = save_end - save_start
-        total_save_results_time += save_results_time
-        log_step(f"Save results time for {vectorization_name}: {save_results_time:.4f} seconds")
-        
-        # Track time spent on plotting
-        plot_start = time.time()
         plot_df = prepare_plot_df(model_results)
         plot_grouped_bar(plot_df, vectorization_name, output_dir)
         # plot_roc_curve_by_model(X_test, y_test, output_dir)
         plot_correct_incorrect_bar(plot_df, vectorization_name, output_dir)
-        plot_end = time.time()
-        plotting_time = plot_end - plot_start
-        total_plotting_time += plotting_time
-        log_step(f"Plotting time for {vectorization_name}: {plotting_time:.4f} seconds")
-    
-    # Log summary of all times
-    if total_models_count > 0:
-        computational_time = total_vectorization_time + total_cv_time + total_training_time + total_prediction_time
-        total_time = computational_time + total_save_results_time + total_plotting_time
-        
-        log_step(f"Time Summary for {k}-mer:")
-        log_step(f"  Total Vectorization Time: {total_vectorization_time:.4f} seconds ({100*total_vectorization_time/total_time:.1f}%)")
-        log_step(f"  Total Cross-Validation Time: {total_cv_time:.4f} seconds ({100*total_cv_time/total_time:.1f}%)")  # Add CV time to summary
-        log_step(f"  Total Training Time: {total_training_time:.4f} seconds ({100*total_training_time/total_time:.1f}%)")
-        log_step(f"  Total Prediction Time: {total_prediction_time:.4f} seconds ({100*total_prediction_time/total_time:.1f}%)")
-        log_step(f"  Total Save Results Time: {total_save_results_time:.4f} seconds ({100*total_save_results_time/total_time:.1f}%)")
-        log_step(f"  Total Plotting Time: {total_plotting_time:.4f} seconds ({100*total_plotting_time/total_time:.1f}%)")
-        log_step(f"  Total ML Time: {(total_cv_time + total_training_time + total_prediction_time):.4f} seconds ({100*(total_cv_time + total_training_time + total_prediction_time)/total_time:.1f}%)")
-        log_step(f"  Total Processing Time: {total_time:.4f} seconds (100%)")
-        log_step(f"  Average Time per Model: {total_time/total_models_count:.4f} seconds")
 
 def filter_single_sample_classes(df: pl.DataFrame) -> pl.DataFrame:
     """
@@ -140,14 +112,11 @@ def run_all(args, input_source, k_range):
     usando input_source (archivo o directorio). Si la vectorización está habilitada,
     lee el archivo TSV generado y lo envía a evaluate_all_vectorizations.
     """
-    # Track timing for the overall process
-    start_total = time.time()
-    
+
     # Track specific operation times
     io_time = 0
     preprocessing_time = 0
     plotting_time = 0
-    vectorization_time = 0
     model_time = 0
     kmertools_time = 0  # Add tracking for kmertools execution time
     
@@ -255,17 +224,7 @@ def run_all(args, input_source, k_range):
                 # Get results from disk using results_to_df
                 results_df = results_to_df()
                 if not results_df.is_empty():
-                    # Calculate time totals across all results
-                    total_vec_time = results_df["Vectorization Time"].sum()
-                    total_train_time = results_df["Training Time"].sum()
-                    total_pred_time = results_df["Prediction Time"].sum()
-                    total_compute_time = total_vec_time + total_train_time + total_pred_time
-                    
-                    log_step("Model Computation Time Summary:\n")
-                    log_step(f"Total Vectorization Time: {total_vec_time:.2f} seconds")
-                    log_step(f"Total Training Time: {total_train_time:.2f} seconds")
-                    log_step(f"Total Prediction Time: {total_pred_time:.2f} seconds")
-                    log_step(f"Total Model Computation Time: {total_compute_time:.2f} seconds")
+                    # Calculate time totals across all results    
                     
                     # Save the DataFrame to a TSV file
                     io_start = time.time()
@@ -297,20 +256,3 @@ def run_all(args, input_source, k_range):
             log_step(f"Error in final result processing: {str(e)}")
             import traceback
             traceback.print_exc()
-    
-    # Calculate and report total execution time with breakdown
-    end_total = time.time()
-    total_time = end_total - start_total
-    
-    log_step("Execution Time Breakdown:\n")
-    log_step(f"External kmertools Execution: {kmertools_time:.2f} seconds ({100*kmertools_time/total_time:.1f}%)")
-    log_step(f"I/O Operations: {io_time:.2f} seconds ({100*io_time/total_time:.1f}%)")
-    log_step(f"Data Preprocessing: {preprocessing_time:.2f} seconds ({100*preprocessing_time/total_time:.1f}%)")
-    log_step(f"Model Computation: {model_time:.2f} seconds ({100*model_time/total_time:.1f}%)")
-    log_step(f"Plotting: {plotting_time:.2f} seconds ({100*plotting_time/total_time:.1f}%)")
-    
-    # Calculate other time (setup, framework overhead, etc.)
-    measured_time = kmertools_time + io_time + preprocessing_time + model_time + plotting_time
-    other_time = total_time - measured_time
-    log_step(f"Other/Overhead: {other_time:.2f} seconds ({100*other_time/total_time:.1f}%)")
-    log_step(f"Total Runtime: {total_time:.2f} seconds (100%)")
