@@ -182,8 +182,8 @@ def run_all(args, input_source, k_range):
                 process_end = time.time()
                 # Track actual model processing time separately from other operations
                 model_time += process_end - process_start
-                log_step(f"Successfully completed processing for {k}-mer analysis\n")
-                log_step(f"Total processing time for {k}-mer: {process_end - process_start:.4f} seconds")
+                log_step(f"Successfully completed processing for {k}-mer analysis")
+                log_step(f"Total processing time for {k}-mer: {process_end - process_start:.4f} seconds\n")
                 
             except Exception as e:
                 log_step(f"An error occurred during vectorization for {k}-mer processing: {e}")
