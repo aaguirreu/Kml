@@ -162,6 +162,58 @@ def vectorize_onehot(df: pl.DataFrame) -> pl.DataFrame:
     
     return df
 
+# PCA is now a utility function, not a vectorization method
+def apply_pca(df: pl.DataFrame, n_components: int = 50, prefix: str = "") -> pl.DataFrame:
+    """
+    Applies Principal Component Analysis (PCA) to the feature columns.
+    
+    Parameters:
+        df (pl.DataFrame): DataFrame with columns "file", "specie" and feature columns.
+        n_components (int): Number of principal components to keep. Default is 50.
+        prefix (str): Optional prefix for the vectorization method in the name.
+        
+    Returns:
+        pl.DataFrame: DataFrame with columns "file", "specie" and PCA components.
+    """
+    from sklearn.decomposition import PCA
+    
+    start_time = time.time()  # Start timing for PCA
+    
+    # Extract the "specie" and "file" columns
+    specie_column = df["specie"]
+    file_column = df["file"]
+    
+    # Select the feature columns
+    feature_data = df.drop(["file", "specie"])
+    
+    # Convert the features to float and extract as a NumPy array
+    feature_np = feature_data.with_columns([pl.col(c).cast(pl.Float64) for c in feature_data.columns]).to_numpy()
+    
+    # Apply PCA
+    pca = PCA(n_components=min(n_components, min(feature_np.shape)))
+    pca_result = pca.fit_transform(feature_np)
+    
+    # Create column names for PCA components
+    pca_columns = [f"PC{i+1}" for i in range(pca_result.shape[1])]
+    
+    # Create a Polars DataFrame with the PCA components
+    vectors_df = pl.DataFrame(pca_result, schema=pca_columns)
+    
+    # Insert the "file" and "specie" columns and reorder
+    vectors_df = vectors_df.with_columns([
+        pl.Series("file", file_column.to_numpy()),
+        pl.Series("specie", specie_column.to_numpy())
+    ])
+    vectors_df = vectors_df.select(["file", "specie"] + pca_columns)
+    
+    # Add variance explained as metadata
+    vectors_df._variance_explained = pca.explained_variance_ratio_.sum()
+    
+    # Add execution time as metadata
+    vectors_df._pca_time = time.time() - start_time
+    
+    return vectors_df
+
 # Dictionary containing the vectorization methods to evaluate
 vectorization_methods = {
     'K-mer Frequency': vectorize_kmer_frequency,

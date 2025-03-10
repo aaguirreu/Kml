@@ -192,6 +192,23 @@ def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value
                 )
                 log_step(f"Prediction results saved to CSV for {model_name}")
                 
+                # Generate ROC curve if model supports predict_proba
+                if hasattr(model, "predict_proba") and output_dir:
+                    from .results import plot_roc_curve_by_model
+                    try:
+                        # Generate ROC curve using the already fitted model
+                        log_step(f"Generating ROC curve for {model_name}")
+                        plot_roc_curve_by_model(
+                            X_test, 
+                            prediction_details['true_labels'], 
+                            model,  # Pass the fitted model
+                            model_name, 
+                            vectorization_name,
+                            output_dir
+                        )
+                    except Exception as e:
+                        log_step(f"Error generating ROC curve for {model_name}: {str(e)}")
+                
                 # Force cleanup - Only clear the local reference, not the template
                 model = None
                 import gc

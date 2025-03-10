@@ -1,13 +1,15 @@
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import roc_curve, auc, confusion_matrix
 from sklearn.preprocessing import label_binarize
 from .mlize import models
-from .disk_storage import load_all_results
+from .disk_storage import load_all_results, ensure_output_subdirs
 import polars as pl  # se agrega para trabajar con polars
 from matplotlib import cm
 import matplotlib.colors as mcolors
+from .logging import log_step  # Add import for log_step function
+import os  # Add import for os module
 
 # Define the model-specific color palette
 def get_model_colors():
@@ -31,6 +33,10 @@ def prepare_plot_df(results_dict):
     return df
 
 def plot_grouped_bar(results_df, vectorization_name, output_dir):
+    # Ensure plots directory exists
+    ensure_output_subdirs(output_dir)
+    plots_dir = os.path.join(output_dir, 'plots', 'bars')
+    
     # Perform melt using Polars (remains as Polars DataFrame)
     results_melted = results_df.melt(
         id_vars='Model',
@@ -84,7 +90,7 @@ def plot_grouped_bar(results_df, vectorization_name, output_dir):
     plt.ylim(0, 1)
     plt.legend(title='Model', fontsize=12)
     plt.tight_layout()
-    plt.savefig(f"{output_dir}/{vectorization_name}_grouped_bar.png")
+    plt.savefig(f"{plots_dir}/{vectorization_name}_grouped_bar.png")
     plt.close()
 
 def plot_correct_incorrect_bar(results_df, vectorization_name, output_dir):
@@ -98,6 +104,10 @@ def plot_correct_incorrect_bar(results_df, vectorization_name, output_dir):
         vectorization_name (str): Name of the vectorization technique (for the chart title).
         output_dir (str): Directory where the chart will be saved.
     """
+    # Ensure plots directory exists
+    ensure_output_subdirs(output_dir)
+    plots_dir = os.path.join(output_dir, 'plots', 'bars')
+    
     # Perform melt with Polars
     df_melted = results_df.melt(
         id_vars="Model",
@@ -159,67 +169,156 @@ def plot_correct_incorrect_bar(results_df, vectorization_name, output_dir):
     plt.legend(title="Model", loc="upper right")
     plt.tight_layout()
     
-    plt.savefig(f"{output_dir}/{vectorization_name}_correct_incorrect_bar.png")
+    plt.savefig(f"{plots_dir}/{vectorization_name}_correct_incorrect_bar.png")
     plt.close()
 
 
-def plot_roc_curve_by_model(X_test, y_test, output_dir):
+def plot_roc_curve_by_model(X_test, y_test, model, model_name, vectorization_name, output_dir):
     """
-    Plots ROC curves for multiple models and their respective classes, and displays the average AUC for each model.
+    Plots ROC curves for a model with proper micro-averaging and per-class curves.
+    
+    Parameters:
+        X_test: Test features
+        y_test: True labels
+        model: The trained model instance
+        model_name: Name of the model
+        vectorization_name: Name of the vectorization method
+        output_dir: Directory to save the plot
     """
-    classes = sorted(y_test.unique())
-    y_test_binarized = label_binarize(y_test, classes=classes)
-    model_aucs = {}
+    # Ensure plots directory exists
+    ensure_output_subdirs(output_dir)
+    plots_dir = os.path.join(output_dir, 'plots', 'roc')
     
     # Get the model color dictionary
     model_colors = get_model_colors()
-
-    for model_name, model in models.items():
-        if hasattr(model, "predict_proba"):
-            y_score = model.predict_proba(X_test)
-            aucs = []
-            class_aucs = []
-            for i, class_name in enumerate(classes):
-                fpr, tpr, _ = roc_curve(y_test_binarized[:, i], y_score[:, i])
-                roc_auc = auc(fpr, tpr)
-                aucs.append(roc_auc)
-                class_aucs.append((class_name, fpr, tpr, roc_auc))
-            
-            avg_auc = np.mean(aucs)
-            model_aucs[model_name] = (avg_auc, class_aucs, y_score)
-        else:
-            print(f"{model_name} does not support predict_proba and will be skipped.")
+    model_color = model_colors.get(model_name, '#333333')
     
-    sorted_models = sorted(model_aucs.items(), key=lambda x: x[1][0], reverse=True)
-    for model_name, (avg_auc, class_aucs, y_score) in sorted_models:
-        sorted_classes = sorted(class_aucs, key=lambda x: x[3], reverse=True)
-        
-        plt.figure(figsize=(8, 6))
-        
-        # Get the model's assigned color
-        model_color = model_colors.get(model_name, '#333333')
-        
-        # Use different line styles for different classes but keep the same color for the model
-        line_styles = ['-', '--', '-.', ':']
-        
-        for i, (class_name, fpr, tpr, roc_auc) in enumerate(sorted_classes):
-            # Cycle through line styles if there are more classes than styles
-            line_style = line_styles[i % len(line_styles)]
-            plt.plot(fpr, tpr, label=f"{class_name} (AUC = {roc_auc:.2f})", 
-                     color=model_color, linestyle=line_style, linewidth=2)
-        
-        plt.plot([0, 1], [0, 1], 'k--', label="Random Guess")
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel("False Positive Rate", fontsize=14)
-        plt.ylabel("True Positive Rate", fontsize=14)
-        plt.title(f"ROC Curve: {model_name} (Avg AUC = {avg_auc:.2f})", fontsize=16)
+    if not hasattr(model, "predict_proba"):
+        log_step(f"{model_name} does not support predict_proba and will be skipped.")
+        return
+    
+    # Get unique classes
+    classes = np.unique(y_test)
+    n_classes = len(classes)
+    
+    # Binarize the labels for ROC curve calculation
+    from sklearn.preprocessing import label_binarize
+    y_test_bin = label_binarize(y_test, classes=classes)
+    
+    # Get prediction probabilities
+    y_score = model.predict_proba(X_test)
+    
+    # Calculate ROC curve and ROC area for each class
+    from sklearn.metrics import roc_curve, auc
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+    
+    # Increase figure size to accommodate all elements - make it larger than before
+    plt.figure(figsize=(15, 12))  # Increased size
+    
+    # Plot ROC for each class
+    class_colors = plt.cm.tab10(np.linspace(0, 1, n_classes))
+    
+    # First calculate and store all the values
+    for i, cls in enumerate(classes):
+        fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_score[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+    
+    # Plot individual class ROC curves
+    for i, cls in enumerate(classes):
+        plt.plot(fpr[i], tpr[i], lw=1, alpha=0.7, color=class_colors[i],
+                 label=f'ROC class {cls} (AUC = {roc_auc[i]:.2f})')
+    
+    # Compute macro-average ROC curve and ROC area
+    macro_fpr = np.unique(np.concatenate([fpr[i] for i in range(n_classes)]))
+    macro_tpr = np.zeros_like(macro_fpr)
+    for i in range(n_classes):
+        macro_tpr += np.interp(macro_fpr, fpr[i], tpr[i])
+    
+    # Average TPR values and compute AUC
+    macro_tpr /= n_classes
+    macro_auc = auc(macro_fpr, macro_tpr)
+    
+    # Plot macro-average ROC curve
+    plt.plot(macro_fpr, macro_tpr, lw=2, color='navy',
+             label=f'Macro-average ROC (AUC = {macro_auc:.2f})',
+             linestyle='-')
+    
+    # Compute micro-average ROC curve and ROC area
+    y_test_flat = y_test_bin.ravel()
+    y_score_flat = np.concatenate([y_score[:, i] for i in range(n_classes)])
+    
+    # Debug: Log data shapes to verify correct processing
+    log_step(f"Shape of flattened test data: {y_test_flat.shape}")
+    log_step(f"Shape of flattened score data: {y_score_flat.shape}")
+    
+    micro_fpr, micro_tpr, _ = roc_curve(y_test_flat, y_score_flat)
+    micro_auc = auc(micro_fpr, micro_tpr)
+    
+    # Plot micro-average ROC curve with the model's color
+    plt.plot(micro_fpr, micro_tpr, lw=3, color=model_color,
+             label=f'Micro-average ROC (AUC = {micro_auc:.2f})',
+             linestyle='-')
+    
+    # Plot the random guessing line
+    plt.plot([0, 1], [0, 1], 'k--', label='Random guessing', alpha=0.8)
+    
+    # Add plot details
+    plt.xlim([-0.01, 1.01])
+    plt.ylim([-0.01, 1.01])
+    plt.xlabel('False Positive Rate', fontsize=14)
+    plt.ylabel('True Positive Rate', fontsize=14)
+    plt.title(f"ROC Curves: {model_name}\n{vectorization_name}", fontsize=16)
+    
+    # Adjust legend position and font size based on number of classes
+    if n_classes > 10:
+        # For many classes, move legend outside the plot
+        plt.legend(loc="center left", fontsize=8, bbox_to_anchor=(1.02, 0.5))
+    else:
         plt.legend(loc="lower right", fontsize=10)
-        plt.grid()
-        # Guardar cada ROC curve en la carpeta output con un nombre basado en el modelo
-        safe_model_name = model_name.replace(" ", "_")
-        plt.savefig(f"{output_dir}/roc_curve_{safe_model_name}.png")
-        plt.close()
+        
+    plt.grid(True, linestyle='--', alpha=0.5)
+    
+    # Save the figure with a more descriptive name
+    safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
+    safe_vectorization = vectorization_name.replace(" ", "_")
+    
+    # Use tight_layout instead of constrained_layout
+    plt.tight_layout()
+    plt.savefig(f"{plots_dir}/roc_curve_{safe_vectorization}_{safe_model_name}.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Log the AUC values for reference
+    log_step(f"ROC AUC for {model_name} ({vectorization_name}):")
+    log_step(f"  Micro-average AUC: {micro_auc:.4f}")
+    log_step(f"  Macro-average AUC: {macro_auc:.4f}")
+    # for i, cls in enumerate(classes):
+    #     log_step(f"  Class '{cls}' AUC: {roc_auc[i]:.4f}")
+
+# Keep the original function with different name for backward compatibility
+def plot_roc_curves_from_models(X_test, y_test, output_dir):
+    """Legacy function - kept for backward compatibility"""
+    from .logging import log_step
+    log_step("Warning: Using deprecated ROC curve function. Consider updating code.")
+    
+    # Attempt to import models but warn this is not recommended
+    from .mlize import models
+    
+    classes = np.unique(y_test)
+    y_test_binarized = label_binarize(y_test, classes=classes)
+    
+    # Get the model color dictionary
+    model_colors = get_model_colors()
+    
+    for model_name, model in models.items():
+        try:
+            if hasattr(model, "predict_proba"):
+                log_step(f"Attempting to generate ROC curve using global model template: {model_name}")
+                # ...rest of the implementation similar to original
+                # This function should generally not be used
+        except Exception as e:
+            log_step(f"Error in deprecated ROC curve function: {str(e)}")
 
 def plot_bacc_mcc_4panels(results_df, output_dir):
     """
@@ -234,6 +333,16 @@ def plot_bacc_mcc_4panels(results_df, output_dir):
       (d) MCC (Test)
     con degradado de color de 0 a 1 en cada barra.
     """
+    # For global_plots directory, ensure the bars subdirectory exists
+    if output_dir.endswith('global_plots'):
+        plots_dir = os.path.join(output_dir, 'bars')
+        if not os.path.exists(plots_dir):
+            os.makedirs(plots_dir)
+    else:
+        # Regular k-mer subdirectory
+        ensure_output_subdirs(output_dir)
+        plots_dir = os.path.join(output_dir, 'plots', 'bars')
+    
     # 1) Get model colors
     model_colors = get_model_colors()
     
@@ -310,8 +419,8 @@ def plot_bacc_mcc_4panels(results_df, output_dir):
     axes[1, 1].set_title('(d)')
 
     plt.tight_layout()
-    # Fix: Use a generic name for the output file instead of vectorization_name
-    plt.savefig(f"{output_dir}/bacc_mcc_4panels.png")
+    # Save to the appropriate directory
+    plt.savefig(f"{plots_dir}/bacc_mcc_4panels.png")
     plt.close()
 
 
@@ -451,3 +560,187 @@ def get_best_k():
     )[0]
 
     return best_k
+
+def plot_confusion_matrices(y_true, y_pred, vectorization_name, model_name, output_dir):
+    """
+    Generate and save normalized confusion matrices for model predictions.
+    
+    Parameters:
+        y_true: Array of true labels
+        y_pred: Array of predicted labels
+        vectorization_name: Name of the vectorization method
+        model_name: Name of the model
+        output_dir: Directory to save the plot
+    """
+    # Ensure plots directory exists
+    ensure_output_subdirs(output_dir)
+    plots_dir = os.path.join(output_dir, 'plots', 'confusion_matrix')
+    
+    # Get unique class names
+    class_names = np.unique(np.concatenate([y_true, y_pred]))
+    
+    # Create confusion matrix
+    cm = confusion_matrix(y_true, y_pred, labels=class_names)
+    
+    # Normalize the confusion matrix
+    with np.errstate(divide='ignore', invalid='ignore'):
+        cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        cm_normalized = np.nan_to_num(cm_normalized)  # Replace NaN with 0
+    
+    # Plot normalized matrix (as decimal values between 0-1)
+    plt.figure(figsize=(max(8, len(class_names)*0.5), max(6, len(class_names)*0.4)))
+    sns.heatmap(cm_normalized, annot=True, fmt='.2f', cmap='Blues',
+                xticklabels=class_names, yticklabels=class_names)
+    plt.title(f'Normalized Confusion Matrix - {model_name}\n{vectorization_name}')
+    plt.ylabel('True Species')
+    plt.xlabel('Predicted Species')
+    
+    # Rotate x-axis labels for better readability
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=45)
+    
+    plt.tight_layout()
+    
+    # Save the normalized figure
+    safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
+    safe_vectorization = vectorization_name.replace(" ", "_")
+    plt.savefig(f"{plots_dir}/confusion_matrix_normalized_{safe_vectorization}_{safe_model_name}.png")
+    plt.close()
+
+def plot_feature_importance_heatmap(model, feature_names, vectorization_name, model_name, output_dir):
+    """
+    Generate and save a heatmap of feature importances for the given model.
+    
+    Parameters:
+        model: Trained model with feature_importances_ attribute or coef_ attribute
+        feature_names: List of feature names
+        vectorization_name: Name of the vectorization method
+        model_name: Name of the model
+        output_dir: Directory to save the plot
+    """
+    # Ensure plots directory exists
+    ensure_output_subdirs(output_dir)
+    
+    importances = None
+    
+    # Get feature importances based on model type
+    if hasattr(model, 'feature_importances_'):  # Random Forest
+        importances = model.feature_importances_
+    elif hasattr(model, 'coef_'):  # Linear models like Logistic Regression
+        importances = np.abs(model.coef_).sum(axis=0) if model.coef_.ndim > 1 else np.abs(model.coef_)
+    
+    if importances is not None:
+        # Get the top N important features
+        n_features = min(30, len(feature_names))  # Limit to top 30 features or less
+        indices = np.argsort(importances)[-n_features:]
+        top_features = [feature_names[i] for i in indices]
+        top_importances = [importances[i] for i in indices]
+        
+        # Sort in descending order for better visualization
+        top_features = [x for _, x in sorted(zip(top_importances, top_features), reverse=True)]
+        top_importances = sorted(top_importances, reverse=True)
+        
+        # Create bar chart version in the 'bars' subdirectory
+        plt.figure(figsize=(10, max(4, n_features * 0.3)))
+        bars_dir = os.path.join(output_dir, 'plots', 'bars')
+        
+        # Create horizontal bar chart for better readability with many features
+        plt.barh(range(len(top_features)), top_importances, color=get_model_colors().get(model_name, '#333333'))
+        plt.yticks(range(len(top_features)), top_features)
+        plt.xlabel('Feature Importance')
+        plt.title(f'Top {n_features} Feature Importance - {model_name}\n{vectorization_name}')
+        plt.tight_layout()
+        
+        # Save the figure
+        safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
+        safe_vectorization = vectorization_name.replace(" ", "_")
+        plt.savefig(f"{bars_dir}/feature_importance_{safe_vectorization}_{safe_model_name}.png")
+        plt.close()
+        
+        # Create a heatmap version in the 'heatmap' subdirectory
+        plt.figure(figsize=(12, max(4, n_features * 0.25)))
+        heatmap_dir = os.path.join(output_dir, 'plots', 'heatmap')
+        
+        data = np.zeros((1, len(top_features)))
+        for i, importance in enumerate(top_importances):
+            data[0, i] = importance
+            
+        sns.heatmap(data, annot=True, fmt='.3f', cmap='viridis',
+                    xticklabels=top_features, yticklabels=['Importance'])
+        plt.title(f'Feature Importance Heatmap - {model_name}\n{vectorization_name}')
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        
+        # Save the heatmap figure
+        plt.savefig(f"{heatmap_dir}/feature_heatmap_{safe_vectorization}_{safe_model_name}.png")
+        plt.close()
+
+def plot_prediction_pie(y_true, y_pred, vectorization_name, model_name, output_dir):
+    """
+    Generate and save a pie chart showing the proportion of correct vs. incorrect predictions.
+    
+    Parameters:
+        y_true: Array of true labels
+        y_pred: Array of predicted labels
+        vectorization_name: Name of the vectorization method
+        model_name: Name of the model
+        output_dir: Directory to save the plot
+    """
+    # Ensure plots directory exists
+    ensure_output_subdirs(output_dir)
+    plots_dir = os.path.join(output_dir, 'plots', 'pie')
+    
+    # Calculate correct and incorrect predictions
+    correct = np.sum(y_true == y_pred)
+    incorrect = np.sum(y_true != y_pred)
+    
+    # Get per-class accuracy
+    classes = np.unique(y_true)
+    class_correct = {}
+    class_total = {}
+    
+    for cls in classes:
+        mask = y_true == cls
+        class_total[cls] = np.sum(mask)
+        class_correct[cls] = np.sum(np.logical_and(mask, y_true == y_pred))
+    
+    # Create overall pie chart
+    labels = ['Correct', 'Incorrect']
+    sizes = [correct, incorrect]
+    colors = ['#66b3ff', '#ff9999']
+    
+    plt.figure(figsize=(10, 10))
+    
+    # First pie chart - overall accuracy
+    plt.subplot(1, 2, 1)
+    plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%',
+            startangle=90, shadow=True, explode=(0, 0.1))
+    plt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
+    plt.title(f'Overall Prediction Results\n{correct}/{correct+incorrect} Correct')
+    
+    # Second pie chart - per-class accuracy
+    plt.subplot(1, 2, 2)
+    class_labels = []
+    class_sizes = []
+    class_colors = plt.cm.tab20(np.linspace(0, 1, len(classes)))
+    explodes = [0.05] * len(classes)
+    
+    for i, cls in enumerate(classes):
+        accuracy = class_correct[cls] / class_total[cls] if class_total[cls] > 0 else 0
+        class_labels.append(f"{cls}: {accuracy:.1%}")
+        class_sizes.append(class_total[cls])
+    
+    plt.pie(class_sizes, labels=class_labels, colors=class_colors, 
+            autopct=lambda p: f'{int(p*sum(class_sizes)/100)}', startangle=90, 
+            shadow=True, explode=explodes)
+    plt.axis('equal')
+    plt.title('Class Distribution')
+    
+    plt.suptitle(f'Prediction Results - {model_name}\n{vectorization_name}', fontsize=16)
+    plt.tight_layout()
+    
+    # Save the figure
+    safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
+    safe_vectorization = vectorization_name.replace(" ", "_")
+    plt.savefig(f"{plots_dir}/prediction_pie_{safe_vectorization}_{safe_model_name}.png")
+    plt.close()

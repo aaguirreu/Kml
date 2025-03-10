@@ -4,19 +4,22 @@ import subprocess
 import time
 from .logging import log_memory_usage, log_step, log_results
 from .mlize import extract_species_from_filename, extract_species_from_csv, run_models
-from .vectorize import vectorization_methods
+from .vectorize import vectorization_methods, apply_pca
 from . import __date__
-from .disk_storage import save_result, clear_results, save_model
-from .results import plot_grouped_bar, plot_roc_curve_by_model, results_to_df, plot_correct_incorrect_bar, plot_bacc_mcc_4panels, prepare_plot_df, best_k_accuracy
+from .disk_storage import save_result, clear_results, save_model, get_predictions_csv_path, load_model, get_model_path, ensure_global_plots_dir
+from .results import plot_grouped_bar, plot_roc_curve_by_model, results_to_df, plot_correct_incorrect_bar, plot_bacc_mcc_4panels, prepare_plot_df, best_k_accuracy, plot_confusion_matrices, plot_feature_importance_heatmap, plot_prediction_pie
 import polars as pl
 
-def evaluate_all_vectorizations(k, df, output_dir):
+def evaluate_all_vectorizations(k, df, output_dir, apply_pca_flag=False, pca_components=50):
     """
     Iterates through the vectorization methods defined in 'vectorization_methods'
     and, for each one, runs the ML pipeline by calling 'run_models'.
     
     Parameters:
         df (pl.DataFrame): Input DataFrame with "file", "specie", and k-mer counts.
+        output_dir (str): Directory to save outputs
+        apply_pca_flag (bool): Whether to apply PCA to each vectorization method
+        pca_components (int): Number of PCA components if apply_pca_flag is True
     
     Returns:
         pl.DataFrame: A table with the results (metrics) for each vectorization method and model.
@@ -42,6 +45,23 @@ def evaluate_all_vectorizations(k, df, output_dir):
         vectorization_time = getattr(vectorized_data, '_vectorization_time', 0)
         total_vectorization_time += vectorization_time
         log_step(f"Vectorization time for {vectorization_name}: {vectorization_time:.4f} seconds")
+        
+        # Apply PCA if the flag is set
+        if apply_pca_flag:
+            log_step(f"Applying PCA to {vectorization_name} with {pca_components} components")
+            original_vectorization_name = vectorization_name
+            vectorized_data = apply_pca(vectorized_data, n_components=pca_components)
+            
+            # Update the vectorization name to include PCA
+            vectorization_name = f"{original_vectorization_name} + PCA"
+            
+            # Log PCA-specific information
+            pca_time = getattr(vectorized_data, '_pca_time', 0)
+            total_vectorization_time += pca_time
+            log_step(f"PCA time for {vectorization_name}: {pca_time:.4f} seconds")
+            
+            variance_explained = getattr(vectorized_data, '_variance_explained', 0)
+            log_step(f"PCA variance explained: {variance_explained:.2%}")
         
         log_step(f"Running models for {vectorization_name}")
         # Pass output_dir and vectorization_name to run_models so it can save models
@@ -82,6 +102,40 @@ def evaluate_all_vectorizations(k, df, output_dir):
         plot_df = prepare_plot_df(model_results)
         plot_grouped_bar(plot_df, vectorization_name, output_dir)
         plot_correct_incorrect_bar(plot_df, vectorization_name, output_dir)
+        
+        # Generate additional visualization for each model
+        for model_name in model_results.keys():
+            try:
+                # Load saved predictions using the updated path function
+                predictions_path = get_predictions_csv_path(vectorization_name, model_name, output_dir)
+                if os.path.exists(predictions_path):
+                    predictions_df = pl.read_csv(predictions_path)
+                    y_true = predictions_df["true_species"].to_numpy()
+                    y_pred = predictions_df["predicted_species"].to_numpy()
+                    
+                    # Generate confusion matrices
+                    log_step(f"Generating confusion matrix for {vectorization_name} - {model_name}")
+                    plot_confusion_matrices(y_true, y_pred, vectorization_name, model_name, output_dir)
+                    
+                    # Generate pie chart for predictions
+                    log_step(f"Generating prediction pie chart for {vectorization_name} - {model_name}")
+                    plot_prediction_pie(y_true, y_pred, vectorization_name, model_name, output_dir)
+                    
+                    # Try to load the saved model for feature importance using the updated path function
+                    model_path = get_model_path(vectorization_name, model_name, output_dir)
+                    
+                    if os.path.exists(model_path):
+                        model = load_model(model_path)
+                        
+                        # Get feature names (all columns except file and specie)
+                        feature_names = [col for col in df.columns if col not in ["file", "specie"]]
+                        
+                        # Generate feature importance heatmap
+                        log_step(f"Generating feature importance for {vectorization_name} - {model_name}")
+                        plot_feature_importance_heatmap(model, feature_names, vectorization_name, model_name, output_dir)
+            except Exception as e:
+                log_step(f"Error generating visualizations for {model_name}: {str(e)}")
+                continue
 
 def filter_single_sample_classes(df: pl.DataFrame) -> pl.DataFrame:
     """
@@ -102,6 +156,100 @@ def filter_single_sample_classes(df: pl.DataFrame) -> pl.DataFrame:
     # Eliminar la columna auxiliar
     df = df.drop("species_count")
     return df
+
+def analyze_taxonomy(df):
+    """
+    Analyze and log the unique species and genera in the dataset.
+    
+    Parameters:
+        df (pl.DataFrame): DataFrame containing a 'specie' column with species names
+    """
+    if 'specie' not in df.columns:
+        log_step("Cannot analyze taxonomy: 'specie' column not found in DataFrame")
+        return
+
+    try:
+        # Use a safer way to get unique species without assuming a particular data type
+        unique_species_list = df['specie'].unique().to_list()
+        log_step(f"Number of unique species in the dataset: {len(unique_species_list)}")
+        
+        # Extract genera using Python native methods rather than Polars operations
+        genera_set = set()
+        
+        for species in unique_species_list:
+            try:
+                # Handle different potential data types
+                if isinstance(species, list):
+                    # If the species is a list, take first element as the species name
+                    species_str = str(species[0]) if species else ""
+                else:
+                    # Otherwise convert to string
+                    species_str = str(species)
+                
+                # Extract the genus (first word)
+                genus = species_str.split(' ')[0] if species_str else ""
+                if genus:
+                    genera_set.add(genus)
+            except Exception as e:
+                log_step(f"Warning: Could not extract genus from '{species}': {str(e)}")
+        
+        log_step(f"Number of unique genera in the dataset: {len(genera_set)}")
+            
+    except Exception as e:
+        log_step(f"Error in taxonomy analysis: {str(e)}")
+        import traceback
+        log_step(traceback.format_exc())
+        log_step("Continuing without taxonomy analysis")
+
+def save_performance_metrics(output_dir):
+    """
+    Save performance metrics to a TSV file, handling any exceptions that occur.
+    
+    Parameters:
+        output_dir (str): Directory where to save the metrics file
+    
+    Returns:
+        pl.DataFrame: The DataFrame that was saved (or attempted to be saved)
+    """
+    metrics_output_filepath = os.path.join(output_dir, 'performance_metrics.tsv')
+    results_df = None
+    
+    try:
+        # Get results from disk using results_to_df
+        results_df = results_to_df()
+        if not results_df.is_empty():
+            # Verify K-mer column exists in results
+            if "K-mer" not in results_df.columns:
+                log_step("Warning: K-mer column not found in results. This indicates a problem with result tracking.")
+                # Instead of adding a fixed value, log the missing information
+                log_step("Please check that k values are being correctly passed to models.")
+                
+                # If we still need the file to be created, add the k values but with a clear warning
+                results_df = results_df.with_columns(
+                    pl.lit(None).cast(pl.Int64).alias("K-mer")
+                )
+                log_step("Added placeholder K-mer column with null values.")
+            
+            # Reorder columns according to desired format
+            time_cols = ["CV Time", "Training Time", "Prediction Time", "Complete Model Time"]
+            main_cols = ["K-mer", "Vectorization", "Model", "Accuracy", "F1 Score", "AUC"]
+            other_cols = [col for col in results_df.columns if col not in main_cols + time_cols]
+            results_df = results_df.select(main_cols + other_cols + time_cols)
+            
+            # Write the DataFrame to TSV
+            try:
+                results_df.write_csv(metrics_output_filepath, separator='\t')
+                log_step(f"Performance metrics have been successfully saved to {metrics_output_filepath}")
+            except Exception as save_error:
+                log_step(f"Error saving performance metrics file: {str(save_error)}")
+        else:
+            log_step("No results available to save to metrics file")
+    except Exception as e:
+        log_step(f"An error occurred while preparing the performance metrics: {str(e)}")
+        import traceback
+        traceback.print_exc()
+    
+    return results_df
 
 def run_all(args, input_source, k_range):
     """
@@ -175,10 +323,14 @@ def run_all(args, input_source, k_range):
                 log_step("Filtering classes with less than 3 samples")
                 df = filter_single_sample_classes(df)
                 
+                # Analyze and log taxonomy information
+                analyze_taxonomy(df)
+                
                 # Track vectorization and model times separately
                 log_step(f"Initiating vectorization for {k}-mer")
                 process_start = time.time()
-                evaluate_all_vectorizations(k, df, output_dir)
+                # Pass PCA flag and components to evaluate_all_vectorizations
+                evaluate_all_vectorizations(k, df, output_dir, apply_pca_flag=args.pca, pca_components=args.pca_components)
                 process_end = time.time()
                 # Track actual model processing time separately from other operations
                 model_time += process_end - process_start
@@ -187,34 +339,20 @@ def run_all(args, input_source, k_range):
                 
             except Exception as e:
                 log_step(f"An error occurred during vectorization for {k}-mer processing: {e}")
+                # Save performance metrics before exiting due to error
+                save_performance_metrics(args.output_dir)
                 log_results(args.output_dir, input_source, k, k_range)
                 return
 
     # Determinar el mejor k usando la función auxiliar
     if using_vectorization:
         try:
-            # Generate the metrics file first
-            metrics_output_filepath = os.path.join(args.output_dir, 'performance_metrics.tsv')
-            try:
-                # Get results from disk using results_to_df
-                results_df = results_to_df()
-                if not results_df.is_empty():
-                    # Verify K-mer column exists in results
-                    if "K-mer" not in results_df.columns:
-                        log_step("Warning: K-mer column not found in results. This indicates a problem with result tracking.")
-                        # Instead of adding a fixed value, log the missing information
-                        log_step("Please check that k values are being correctly passed to models.")
-                        
-                        # If we still need the file to be created, add the k values but with a clear warning
-                        results_df = results_df.with_columns(
-                            pl.lit(None).cast(pl.Int64).alias("K-mer")
-                        )
-                        log_step("Added placeholder K-mer column with null values.")
-                    
-                    # Save the DataFrame to a TSV file
-                    results_df.write_csv(metrics_output_filepath, separator='\t')
-                    log_step(f"Performance metrics have been successfully saved to {metrics_output_filepath}")
-                    
+            # Generate the metrics file first using our new function
+            results_df = save_performance_metrics(args.output_dir)
+            
+            # If we got results, continue with post-processing
+            if results_df is not None and not results_df.is_empty():
+                try:
                     # Now determine best k
                     best_k = best_k_accuracy()
                     if best_k is not None:
@@ -224,18 +362,15 @@ def run_all(args, input_source, k_range):
                         best_k = list(k_range)[-1] if k_range else None
                         log_results(args.output_dir, input_source, best_k, k_range)
                     
-                    try:
-                        plot_bacc_mcc_4panels(results_df, args.output_dir)
-                        log_step("Successfully generated BACC/MCC 4-panel plot")
-                    except Exception as e:
-                        log_step(f"Error generating BACC/MCC plot: {str(e)}")
-                    
-                else:
-                    log_step("No results available to save to metrics file")
-            except Exception as e:
-                log_step(f"An error occurred while saving the performance metrics file: {str(e)}")
-                import traceback
-                traceback.print_exc()
+                    # Create global_plots directory for final results
+                    global_plots_dir = ensure_global_plots_dir(args.output_dir)
+                    # Call plot_bacc_mcc_4panels with the global plots directory
+                    plot_bacc_mcc_4panels(results_df, global_plots_dir)
+                    log_step("Successfully generated BACC/MCC 4-panel plot in global_plots directory")
+                except Exception as e:
+                    log_step(f"Error in post-processing or plot generation: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
                 
         except Exception as e:
             log_step(f"Error in final result processing: {str(e)}")

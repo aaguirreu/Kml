@@ -25,6 +25,37 @@ def ensure_temp_dir():
     if not os.path.exists(TEMP_DIR):
         os.makedirs(TEMP_DIR)
 
+def ensure_output_subdirs(output_dir):
+    """Ensure output subdirectories exist for organizing results inside k-mer directories."""
+    # Create main subdirectories
+    for subdir in ['plots', 'predictions', 'models']:
+        path = os.path.join(output_dir, subdir)
+        if not os.path.exists(path):
+            os.makedirs(path)
+    
+    # Create plot-specific subdirectories
+    plot_types = ['confusion_matrix', 'heatmap', 'bars', 'pie', 'roc']
+    plots_dir = os.path.join(output_dir, 'plots')
+    for plot_type in plot_types:
+        path = os.path.join(plots_dir, plot_type)
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+def ensure_global_plots_dir(base_output_dir):
+    """Create a global plots directory at the main output level."""
+    global_plots_dir = os.path.join(base_output_dir, 'global_plots')
+    if not os.path.exists(global_plots_dir):
+        os.makedirs(global_plots_dir)
+    
+    # Create plot-specific subdirectories
+    plot_types = ['bars']  # Add more types if needed for global plots
+    for plot_type in plot_types:
+        path = os.path.join(global_plots_dir, plot_type)
+        if not os.path.exists(path):
+            os.makedirs(path)
+    
+    return global_plots_dir
+
 def save_result(vectorization_name: str, model_results: Dict[str, Dict[str, Any]]):
     """
     Save model results to disk.
@@ -79,13 +110,17 @@ def save_model(vectorization_name: str, model_name: str, model, output_dir: str)
         model: Trained model object
         output_dir: Directory where to save the model
     """
+    # Ensure models subdirectory exists
+    ensure_output_subdirs(output_dir)
+    models_dir = os.path.join(output_dir, 'models')
+    
     # Create safe filenames by replacing spaces and special characters
     safe_vectorization = vectorization_name.replace(" ", "_")
     safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
     
     # Generate filename with pattern: vectorization_model.joblib
     filename = f"{safe_vectorization}_{safe_model_name}.joblib"
-    filepath = os.path.join(output_dir, filename)
+    filepath = os.path.join(models_dir, filename)
     
     # Save the model to disk
     joblib.dump(model, filepath)
@@ -108,13 +143,17 @@ def save_prediction_results(vectorization_name: str, model_name: str,
         predicted_labels: Array of predicted species labels
         output_dir: Directory where to save the CSV
     """
+    # Ensure predictions subdirectory exists
+    ensure_output_subdirs(output_dir)
+    predictions_dir = os.path.join(output_dir, 'predictions')
+    
     # Create safe filenames by replacing spaces and special characters
     safe_vectorization = vectorization_name.replace(" ", "_")
     safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
     
     # Generate filename with pattern: vectorization_model_predictions.csv
     filename = f"{safe_vectorization}_{safe_model_name}_predictions.csv"
-    filepath = os.path.join(output_dir, filename)
+    filepath = os.path.join(predictions_dir, filename)
     
     # Extract accessions from file names (assuming format like "prefix_accession_...")
     accessions = []
@@ -136,3 +175,61 @@ def save_prediction_results(vectorization_name: str, model_name: str,
     # Save to CSV
     df.write_csv(filepath)
     return filepath
+
+def load_model(model_path):
+    """
+    Load a saved model from disk.
+    
+    Parameters:
+        model_path: Path to the saved model file
+        
+    Returns:
+        The loaded model object
+    """
+    return joblib.load(model_path)
+
+def get_predictions_csv_path(vectorization_name: str, model_name: str, output_dir: str):
+    """
+    Get the path to the predictions CSV file for a specific model and vectorization
+    
+    Parameters:
+        vectorization_name: Name of the vectorization method
+        model_name: Name of the model
+        output_dir: Directory containing prediction files
+        
+    Returns:
+        Path to the predictions CSV file
+    """
+    # Get path to predictions subdirectory
+    predictions_dir = os.path.join(output_dir, 'predictions')
+    
+    # Create safe filenames by replacing spaces and special characters
+    safe_vectorization = vectorization_name.replace(" ", "_")
+    safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
+    
+    # Generate filename with pattern: vectorization_model_predictions.csv
+    filename = f"{safe_vectorization}_{safe_model_name}_predictions.csv"
+    return os.path.join(predictions_dir, filename)
+
+def get_model_path(vectorization_name: str, model_name: str, output_dir: str):
+    """
+    Get the path to the model file for a specific model and vectorization
+    
+    Parameters:
+        vectorization_name: Name of the vectorization method
+        model_name: Name of the model
+        output_dir: Directory containing model files
+        
+    Returns:
+        Path to the model file
+    """
+    # Get path to models subdirectory
+    models_dir = os.path.join(output_dir, 'models')
+    
+    # Create safe filenames by replacing spaces and special characters
+    safe_vectorization = vectorization_name.replace(" ", "_")
+    safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
+    
+    # Generate filename with pattern: vectorization_model.joblib
+    filename = f"{safe_vectorization}_{safe_model_name}.joblib"
+    return os.path.join(models_dir, filename)
