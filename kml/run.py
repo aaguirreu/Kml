@@ -35,7 +35,7 @@ def evaluate_all_vectorizations(k, df, output_dir, apply_pca_flag=False, pca_com
         # log_memory_usage()
         log_step(f"Applying vectorization: {vectorization_name}")
         
-        # Time the entire vectorization + model training process
+        # Time the vectorization process
         vectorization_start = time.time()
         
         # Apply vectorization - the time is now tracked by the decorator
@@ -48,17 +48,30 @@ def evaluate_all_vectorizations(k, df, output_dir, apply_pca_flag=False, pca_com
         
         # Apply PCA if the flag is set
         if apply_pca_flag:
-            log_step(f"Applying PCA to {vectorization_name} with {pca_components} components")
+            log_step(f"Applying PCA to {vectorization_name}")
             original_vectorization_name = vectorization_name
-            vectorized_data = apply_pca(vectorized_data, n_components=pca_components)
+            
+            # Calculate number of features for logging purposes
+            num_features = len(vectorized_data.columns) - 2  # Subtract 'file' and 'specie' columns
+            
+            # Pass None for n_components to use the default 90% if pca_components is -1 (auto)
+            # Otherwise use the user-specified value
+            use_components = None if pca_components == -1 else pca_components
+            
+            # Apply PCA with dynamic or user-specified components
+            vectorized_data = apply_pca(vectorized_data, n_components=use_components)
+            
+            # Calculate actual number of components used
+            actual_components = len(vectorized_data.columns) - 2  # Subtract 'file' and 'specie' columns
             
             # Update the vectorization name to include PCA
-            vectorization_name = f"{original_vectorization_name} + PCA"
+            vectorization_name = f"{original_vectorization_name} + PCA({actual_components})"
             
             # Log PCA-specific information
             pca_time = getattr(vectorized_data, '_pca_time', 0)
             total_vectorization_time += pca_time
             log_step(f"PCA time for {vectorization_name}: {pca_time:.4f} seconds")
+            log_step(f"Using {actual_components} components (90% of {num_features} features)")
             
             variance_explained = getattr(vectorized_data, '_variance_explained', 0)
             log_step(f"PCA variance explained: {variance_explained:.2%}")
@@ -74,24 +87,30 @@ def evaluate_all_vectorizations(k, df, output_dir, apply_pca_flag=False, pca_com
         
         # Track training and prediction times for summary
         for model_name, metrics in model_results.items():
-            # Calculate total time from vectorization through prediction for this model
-            model_end_time = time.time()
-            total_model_time = model_end_time - vectorization_start
+            # Calculate model-specific time including its portion of vectorization time
+            # This ensures each model has its own complete processing time
+            model_time = (
+                vectorization_time +  # Time for vectorization that applies to all models
+                metrics.get('CV Time', 0) +  # Model-specific CV time
+                metrics.get('Training Time', 0) +  # Model-specific training time
+                metrics.get('Prediction Time', 0)  # Model-specific prediction time
+            )
             
             # Update existing time metrics
-            total_cv_time += metrics.get('CV Time', 0)  # Add CV time tracking
+            total_cv_time += metrics.get('CV Time', 0)
             total_training_time += metrics.get('Training Time', 0)
             total_prediction_time += metrics.get('Prediction Time', 0)
             total_models_count += 1
             
             # Log the complete model processing time
-            log_step(f"Model: {model_name} - Complete Processing Time: {total_model_time:.4f}s")
+            log_step(f"Model: {model_name} - Complete Processing Time: {model_time:.4f}s")
+            log_step(f"  ├─ Vectorization Time: {vectorization_time:.4f}s")
             log_step(f"  ├─ Cross-Validation Time: {metrics.get('CV Time', 0):.4f}s")
             log_step(f"  ├─ Training Time: {metrics.get('Training Time', 0):.4f}s")
             log_step(f"  └─ Prediction Time: {metrics.get('Prediction Time', 0):.4f}s")
             
             # Add the complete model time to metrics
-            metrics['Complete Model Time'] = total_model_time
+            metrics['Complete Model Time'] = model_time
         
         # Add k-mer value to results explicitly - ensure each model has the k value
         for model_name in model_results:
@@ -132,7 +151,9 @@ def evaluate_all_vectorizations(k, df, output_dir, apply_pca_flag=False, pca_com
                         
                         # Generate feature importance heatmap
                         log_step(f"Generating feature importance for {vectorization_name} - {model_name}")
-                        plot_feature_importance_heatmap(model, feature_names, vectorization_name, model_name, output_dir)
+                        success = plot_feature_importance_heatmap(model, feature_names, vectorization_name, model_name, output_dir)
+                        if not success:
+                            log_step(f"Skipping feature importance visualization for {model_name} - not supported for this model type")
             except Exception as e:
                 log_step(f"Error generating visualizations for {model_name}: {str(e)}")
                 continue
@@ -201,12 +222,13 @@ def analyze_taxonomy(df):
         log_step(traceback.format_exc())
         log_step("Continuing without taxonomy analysis")
 
-def save_performance_metrics(output_dir):
+def save_performance_metrics(output_dir, kmertools_times=None):
     """
     Save performance metrics to a TSV file, handling any exceptions that occur.
     
     Parameters:
         output_dir (str): Directory where to save the metrics file
+        kmertools_times (dict, optional): Dictionary mapping k values to kmertools execution times
     
     Returns:
         pl.DataFrame: The DataFrame that was saved (or attempted to be saved)
@@ -230,10 +252,25 @@ def save_performance_metrics(output_dir):
                 )
                 log_step("Added placeholder K-mer column with null values.")
             
+            # Add kmertools counting time if available
+            if kmertools_times is not None:
+                # Create a function to look up k-mer times
+                def get_kmer_time(k):
+                    return kmertools_times.get(k, 0.0)
+                
+                # Add the Counting Time column based on K-mer value
+                results_df = results_df.with_columns(
+                    pl.col("K-mer").map_elements(get_kmer_time).alias("Counting Time")
+                )
+                log_step("Added K-mer counting times to performance metrics")
+            
             # Reorder columns according to desired format
-            time_cols = ["CV Time", "Training Time", "Prediction Time", "Complete Model Time"]
+            time_cols = ["Counting Time", "CV Time", "Training Time", "Prediction Time", "Complete Model Time"]
             main_cols = ["K-mer", "Vectorization", "Model", "Accuracy", "F1 Score", "AUC"]
             other_cols = [col for col in results_df.columns if col not in main_cols + time_cols]
+            
+            # Ensure we only select columns that exist (Counting Time might not be there)
+            time_cols = [col for col in time_cols if col in results_df.columns]
             results_df = results_df.select(main_cols + other_cols + time_cols)
             
             # Write the DataFrame to TSV
@@ -262,6 +299,9 @@ def run_all(args, input_source, k_range):
     model_time = 0
     kmertools_time = 0
     
+    # Dictionary to store kmertools time for each k
+    kmertools_times = {}
+    
     # Clear previous results at the beginning
     clear_results()
     
@@ -283,8 +323,13 @@ def run_all(args, input_source, k_range):
                 kmertools_start = time.time()  # Start timing kmertools
                 subprocess.run(cmd, capture_output=True, text=True, check=True)
                 kmertools_end = time.time()    # End timing kmertools
-                kmertools_time += kmertools_end - kmertools_start  # Accumulate kmertools time
-                log_step(f"Successfully executed kmertools for {k}-mer in {kmertools_end - kmertools_start:.4f} seconds")
+                kmer_execution_time = kmertools_end - kmertools_start
+                kmertools_time += kmer_execution_time  # Accumulate kmertools time
+                
+                # Store the time for this specific k-value
+                kmertools_times[k] = kmer_execution_time
+                
+                log_step(f"Successfully executed kmertools for {k}-mer in {kmer_execution_time:.4f} seconds")
             except subprocess.CalledProcessError as e:
                 log_step(f"An error occurred while executing kmertools for {k}-mer analysis. Details: {e.stderr}")
                 continue
@@ -347,8 +392,8 @@ def run_all(args, input_source, k_range):
     # Determinar el mejor k usando la función auxiliar
     if using_vectorization:
         try:
-            # Generate the metrics file first using our new function
-            results_df = save_performance_metrics(args.output_dir)
+            # Generate the metrics file first using our new function - now pass kmertools_times
+            results_df = save_performance_metrics(args.output_dir, kmertools_times)
             
             # If we got results, continue with post-processing
             if results_df is not None and not results_df.is_empty():
@@ -376,3 +421,4 @@ def run_all(args, input_source, k_range):
             log_step(f"Error in final result processing: {str(e)}")
             import traceback
             traceback.print_exc()
+
