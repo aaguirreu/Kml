@@ -609,71 +609,108 @@ def plot_confusion_matrices(y_true, y_pred, vectorization_name, model_name, outp
 
 def plot_feature_importance_heatmap(model, feature_names, vectorization_name, model_name, output_dir):
     """
-    Generate and save a heatmap of feature importances for the given model.
+    Generate a heatmap visualization of feature importance for the given model.
+    
+    This heatmap shows the most important features (k-mers) for the model's predictions,
+    with higher values (brighter colors) indicating greater importance to the model's
+    decision making. Features are ordered by their importance score.
     
     Parameters:
-        model: Trained model with feature_importances_ attribute or coef_ attribute
-        feature_names: List of feature names
-        vectorization_name: Name of the vectorization method
+        model: Trained model object that has feature_importances_ or similar attribute
+        feature_names: List of feature names corresponding to columns used in training
+        vectorization_name: Name of vectorization method used
         model_name: Name of the model
-        output_dir: Directory to save the plot
+        output_dir: Directory to save the output plot
     """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
+    import pandas as pd
+    from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+    from sklearn.svm import SVC
+    from sklearn.inspection import permutation_importance
+    
     # Ensure plots directory exists
     ensure_output_subdirs(output_dir)
+    plots_dir = os.path.join(output_dir, 'plots', 'heatmap')
     
-    importances = None
+    # Add explicit directory creation as backup
+    os.makedirs(plots_dir, exist_ok=True)
+    log_step(f"Processing feature importance heatmap for {model_name} ({vectorization_name})")
+    
+    plt.figure(figsize=(10, 8))
     
     # Get feature importances based on model type
-    if hasattr(model, 'feature_importances_'):  # Random Forest
-        importances = model.feature_importances_
-    elif hasattr(model, 'coef_'):  # Linear models like Logistic Regression
-        importances = np.abs(model.coef_).sum(axis=0) if model.coef_.ndim > 1 else np.abs(model.coef_)
+    feature_importances = None
     
-    if importances is not None:
-        # Get the top N important features
-        n_features = min(30, len(feature_names))  # Limit to top 30 features or less
-        indices = np.argsort(importances)[-n_features:]
-        top_features = [feature_names[i] for i in indices]
-        top_importances = [importances[i] for i in indices]
-        
-        # Sort in descending order for better visualization
-        top_features = [x for _, x in sorted(zip(top_importances, top_features), reverse=True)]
-        top_importances = sorted(top_importances, reverse=True)
-        
-        # Create bar chart version in the 'bars' subdirectory
-        plt.figure(figsize=(10, max(4, n_features * 0.3)))
-        bars_dir = os.path.join(output_dir, 'plots', 'bars')
-        
-        # Create horizontal bar chart for better readability with many features
-        plt.barh(range(len(top_features)), top_importances, color=get_model_colors().get(model_name, '#333333'))
-        plt.yticks(range(len(top_features)), top_features)
-        plt.xlabel('Feature Importance')
-        plt.title(f'Top {n_features} Feature Importance - {model_name}\n{vectorization_name}')
-        plt.tight_layout()
-        
-        # Save the figure
-        safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
-        safe_vectorization = vectorization_name.replace(" ", "_")
-        plt.savefig(f"{bars_dir}/feature_importance_{safe_vectorization}_{safe_model_name}.png")
-        plt.close()
-        
-        # Create a heatmap version in the 'heatmap' subdirectory
-        plt.figure(figsize=(12, max(4, n_features * 0.25)))
-        heatmap_dir = os.path.join(output_dir, 'plots', 'heatmap')
-        
-        data = np.zeros((1, len(top_features)))
-        for i, importance in enumerate(top_importances):
-            data[0, i] = importance
+    # Handle different model types for feature importance
+    try:
+        # For tree-based models like Random Forest, Gradient Boosting
+        if hasattr(model, 'feature_importances_'):
+            log_step(f"Using native feature_importances_ for {model_name}")
+            feature_importances = model.feature_importances_
             
-        sns.heatmap(data, annot=True, fmt='.3f', cmap='viridis',
-                    xticklabels=top_features, yticklabels=['Importance'])
-        plt.title(f'Feature Importance Heatmap - {model_name}\n{vectorization_name}')
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        
-        # Save the heatmap figure
-        plt.savefig(f"{heatmap_dir}/feature_heatmap_{safe_vectorization}_{safe_model_name}.png")
-        plt.close()
+        # For linear models like Linear SVM, Logistic Regression
+        elif hasattr(model, 'coef_') and not (isinstance(model, SVC) and model.kernel != 'linear'):
+            log_step(f"Using coefficient-based feature importance for {model_name}")
+            feature_importances = np.mean(np.abs(model.coef_), axis=0) if model.coef_.ndim > 1 else np.abs(model.coef_)
+            
+        # For SVM with RBF kernel, we can't easily extract feature importances directly
+        # Skip this complex computation for now to avoid memory issues
+        elif isinstance(model, SVC) and model.kernel == 'rbf':
+            log_step(f"SVM with RBF kernel doesn't provide native feature importance. "
+                     f"Consider using a linear kernel SVM for interpretability.")
+            # Don't try permutation importance here as it's very computationally expensive
+            
+        # For any other model that doesn't fit the above cases
+        else:
+            log_step(f"Model {model_name} doesn't have standard feature importance metrics.")
+            
+        # If we have feature importances, create the heatmap
+        if feature_importances is not None:
+            # Create DataFrame with feature names and importance scores
+            importance_df = pd.DataFrame({'feature': feature_names, 'importance': feature_importances})
+            
+            # Sort by importance and take top 30 features (or fewer if less available)
+            num_features = min(30, len(importance_df))
+            importance_df = importance_df.sort_values('importance', ascending=False).head(num_features)
+            
+            # Reshape for heatmap display
+            importance_matrix = importance_df['importance'].values.reshape(1, -1)
+            
+            # Create heatmap
+            sns.heatmap(
+                importance_matrix,
+                xticklabels=importance_df['feature'].values,
+                yticklabels=['Importance'],
+                cmap='viridis',
+                cbar_kws={'label': 'Feature Importance Score'}
+            )
+            
+            plt.title(f'Top {num_features} Feature Importance: {vectorization_name} - {model_name}')
+            plt.xticks(rotation=90)
+            plt.tight_layout()
+            
+            # Save plot to file
+            safe_model_name = model_name.replace(" ", "_").replace("(", "").replace(")", "").replace(".", "")
+            safe_vectorization = vectorization_name.replace(" ", "_")
+            output_path = os.path.join(plots_dir, f'feature_importance_{safe_vectorization}_{safe_model_name}.png')
+            
+            plt.savefig(output_path, dpi=300)
+            log_step(f"Successfully saved feature importance heatmap to: {output_path}")
+            plt.close()
+            return True
+        else:
+            plt.close()
+            return False
+            
+    except Exception as e:
+        log_step(f"Error creating feature importance heatmap: {str(e)}")
+        try:
+            plt.close()
+        except:
+            pass
+        return False
 
 def plot_prediction_pie(y_true, y_pred, vectorization_name, model_name, output_dir):
     """
