@@ -9,6 +9,8 @@ import numpy as np
 from .logging import log_step
 import re
 import time  # Add time module import
+import gc
+import psutil
 
 # Define the models to evaluate.
 models = {
@@ -16,6 +18,100 @@ models = {
     'Logistic Regression': LogisticRegression(max_iter=1000, random_state=42),
     'Support Vector Machine (RBF Kernel)': SVC(kernel='rbf', probability=True, random_state=42),
 }
+
+# Function to check memory and adjust model parameters
+def get_memory_optimized_model(model_name, n_features, n_samples):
+    """
+    Creates a memory-optimized version of the specified model based on dataset size.
+    
+    Parameters:
+        model_name: Name of the model
+        n_features: Number of features in the dataset
+        n_samples: Number of samples in the dataset
+        
+    Returns:
+        A configured sklearn model with memory-optimized parameters
+    """
+    # Get current memory state
+    mem = psutil.virtual_memory()
+    available_gb = mem.available / (1024 ** 3)
+    log_step(f"Available memory: {available_gb:.2f} GB")
+    
+    # Estimate dataset size in memory (rough calculation)
+    dataset_size_gb = (n_samples * n_features * 8) / (1024 ** 3)  # 8 bytes per float64
+    log_step(f"Estimated dataset size: {dataset_size_gb:.2f} GB")
+    
+    # For extremely large feature sets (>20k features)
+    high_dimensional = n_features > 20000
+    very_high_dimensional = n_features > 30000
+    
+    if model_name == 'Random Forest':
+        if very_high_dimensional:
+            # For extremely high dimensional data, use extreme memory optimization
+            log_step("Using extremely memory-optimized Random Forest (max_depth=10, n_estimators=50)")
+            return RandomForestClassifier(
+                n_estimators=50,  # Reduce number of trees
+                max_depth=10,     # Limit tree depth
+                min_samples_split=10,  # Require more samples to split
+                min_samples_leaf=4,   # Require more samples per leaf
+                max_features='sqrt',  # Use sqrt of features (reduces memory)
+                bootstrap=True,      # Use bootstrapping (reduces memory)
+                n_jobs=1,            # Use only one core (slower but less memory)
+                random_state=42,
+                verbose=1            # Show progress
+            )
+        elif high_dimensional:
+            # For high dimensional data, use moderate memory optimization
+            log_step("Using memory-optimized Random Forest (max_depth=20, n_estimators=80)")
+            return RandomForestClassifier(
+                n_estimators=80,  # Slightly reduce number of trees
+                max_depth=20,     # Limit tree depth
+                min_samples_split=5,
+                min_samples_leaf=2,
+                max_features='sqrt',  # Use sqrt of features
+                bootstrap=True,
+                n_jobs=2,         # Use limited parallelism
+                random_state=42,
+                verbose=1         # Show progress
+            )
+        else:
+            # For regular datasets, use slight optimization
+            return RandomForestClassifier(
+                n_estimators=100,
+                max_features='sqrt',  # Still use feature selection
+                n_jobs=-1,           # Use all cores
+                random_state=42
+            )
+    
+    elif model_name == 'Logistic Regression':
+        if high_dimensional:
+            log_step("Using memory-optimized Logistic Regression (saga solver)")
+            return LogisticRegression(
+                solver='saga',        # Memory efficient solver
+                penalty='l1',         # L1 regularization for feature selection
+                C=0.1,               # Stronger regularization 
+                max_iter=500,        # Fewer iterations for memory conservation
+                tol=1e-3,            # Looser tolerance
+                random_state=42
+            )
+        else:
+            return LogisticRegression(max_iter=1000, random_state=42)
+    
+    elif model_name == 'Support Vector Machine (RBF Kernel)':
+        if high_dimensional:
+            log_step("Using memory-optimized SVM (linear kernel)")
+            return SVC(
+                kernel='linear',     # Linear kernel is more memory efficient
+                C=1.0,
+                probability=True,
+                random_state=42,
+                cache_size=1000      # Limit cache size
+            )
+        else:
+            return SVC(kernel='rbf', probability=True, random_state=42)
+    
+    # Default case - return the original model
+    return models.get(model_name)
 
 def train_model(X_train, y_train, model):
     """Train the provided model using the training data."""
@@ -38,34 +134,80 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):  # 
         - metrics_dict: Dictionary containing evaluation metrics
         - prediction_details: Dictionary with 'true_labels' and 'predicted_labels'
     """
+    # Add memory tracking
+    initial_memory = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+    log_step(f"Memory usage before model evaluation: {initial_memory:.2f} MB")
+    
     # --- 1) CROSS-VALIDATION ---
     bacc_scorer = make_scorer(balanced_accuracy_score)
     mcc_scorer  = make_scorer(matthews_corrcoef)
 
     # Track cross-validation time
     cv_start_time = time.time()
-    # Average of Balanced Accuracy in CV - use parallel processing with n_jobs=-1
-    bacc_cv = cross_val_score(model, X_train, y_train, scoring=bacc_scorer, cv=cv, n_jobs=-1).mean()
-    # Average of MCC in CV - use parallel processing with n_jobs=-1
-    mcc_cv  = cross_val_score(model, X_train, y_train, scoring=mcc_scorer, cv=cv, n_jobs=-1).mean()
+    
+    try:
+        # Average of Balanced Accuracy in CV - use limited parallelism for large datasets
+        n_jobs = 1 if X_train.shape[1] > 20000 else -1
+        log_step(f"Running cross-validation with {cv} folds and n_jobs={n_jobs}")
+        bacc_cv = cross_val_score(model, X_train, y_train, scoring=bacc_scorer, cv=cv, n_jobs=n_jobs).mean()
+        # Average of MCC in CV
+        mcc_cv  = cross_val_score(model, X_train, y_train, scoring=mcc_scorer, cv=cv, n_jobs=n_jobs).mean()
+    except MemoryError:
+        log_step("Memory error during cross-validation. Using reduced CV.")
+        # Fall back to reduced CV with 3 folds and serial processing
+        bacc_cv = cross_val_score(model, X_train, y_train, scoring=bacc_scorer, cv=3, n_jobs=1).mean()
+        mcc_cv  = cross_val_score(model, X_train, y_train, scoring=mcc_scorer, cv=3, n_jobs=1).mean()
+    except Exception as e:
+        log_step(f"Error during cross-validation: {str(e)}")
+        bacc_cv = 0
+        mcc_cv = 0
+        
     cv_time = time.time() - cv_start_time
+    log_step(f"Cross-validation completed in {cv_time:.2f} seconds")
+    
+    # Force garbage collection after CV
+    gc.collect()
 
     # --- 2) TRAIN FINAL MODEL on all X_train ---
     start_time = time.time()
-    model.fit(X_train, y_train)
+    try:
+        model.fit(X_train, y_train)
+    except MemoryError:
+        log_step("Memory error during training. Attempting with sample reduction.")
+        # Try with a smaller subset if memory error occurs
+        sample_size = min(10000, X_train.shape[0])
+        indices = np.random.choice(X_train.shape[0], sample_size, replace=False)
+        X_train_sample = X_train[indices]
+        y_train_sample = np.array(y_train)[indices]
+        model.fit(X_train_sample, y_train_sample)
+        
     training_time = time.time() - start_time
+    log_step(f"Model training completed in {training_time:.2f} seconds")
+    
+    # Force garbage collection after training
+    gc.collect()
 
     # --- 3) EVALUATION on TEST ---
     start_time = time.time()
     y_pred = model.predict(X_test)
     prediction_time = time.time() - start_time
     
-    start_time = time.time()
-    y_pred_proba = model.predict_proba(X_test) if hasattr(model, "predict_proba") else None
-    proba_time = time.time() - start_time
-    # Add proba time to prediction time if available
-    if y_pred_proba is not None:
-        prediction_time += proba_time
+    # Only calculate predict_proba if the model supports it and won't cause memory issues
+    y_pred_proba = None
+    proba_time = 0
+    if hasattr(model, "predict_proba"):
+        try:
+            start_time = time.time()
+            y_pred_proba = model.predict_proba(X_test)
+            proba_time = time.time() - start_time
+            # Add proba time to prediction time if available
+            prediction_time += proba_time
+        except MemoryError:
+            log_step("Memory error during predict_proba. Skipping probability calculation.")
+        except Exception as e:
+            log_step(f"Error during predict_proba: {str(e)}")
+    
+    log_step(f"Prediction completed in {prediction_time:.2f} seconds")
 
     # Test metrics
     accuracy_test = accuracy_score(y_test, y_pred)
@@ -76,17 +218,25 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):  # 
     # AUC in test (if applicable)
     auc_score_test = None
     if auc and y_pred_proba is not None:
-        if y_pred_proba.shape[1] == 2:
-            # For binary, use the prob. of the positive class
-            y_pred_proba = y_pred_proba[:, 1]
-        auc_score_test = roc_auc_score(
-            y_test,
-            y_pred_proba,
-            multi_class='ovr' if len(np.unique(y_test)) > 2 else None
-        )
+        try:
+            if y_pred_proba.shape[1] == 2:
+                # For binary, use the prob. of the positive class
+                y_pred_proba = y_pred_proba[:, 1]
+            auc_score_test = roc_auc_score(
+                y_test,
+                y_pred_proba,
+                multi_class='ovr' if len(np.unique(y_test)) > 2 else None
+            )
+        except Exception as e:
+            log_step(f"Error calculating AUC: {str(e)}")
 
     correct_predictions    = np.sum(np.array(y_test) == np.array(y_pred))
     incorrect_predictions  = len(y_test) - correct_predictions
+    
+    # Track final memory usage
+    final_memory = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+    memory_increase = final_memory - initial_memory
+    log_step(f"Memory usage after model evaluation: {final_memory:.2f} MB (increase: {memory_increase:.2f} MB)")
 
     # --- 4) RETURN RESULTS ---
     metrics = {
@@ -127,20 +277,53 @@ def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value
     # Store original rows (with 'file' column) for later matching
     original_files = df['file']
     
+    # Get dataset dimensions for memory optimization
+    n_samples, n_features = X.shape
+    log_step(f"Dataset for modeling: {n_samples} samples, {n_features} features")
+    
     # Normalize k-mer counts
+    log_step("Normalizing features with StandardScaler")
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    try:
+        X_scaled = scaler.fit_transform(X)
+    except MemoryError:
+        log_step("Memory error during scaling. Using batch processing.")
+        # Process in batches for large datasets
+        batch_size = 5000
+        X_list = []
+        
+        # Fit scaler on first batch
+        first_batch = X[:min(batch_size, n_samples)]
+        scaler.fit(first_batch)
+        
+        # Transform in batches
+        for i in range(0, n_samples, batch_size):
+            end = min(i + batch_size, n_samples)
+            X_batch = X[i:end]
+            X_batch_scaled = scaler.transform(X_batch)
+            X_list.append(X_batch_scaled)
+            del X_batch  # Free memory
+            gc.collect()
+            
+        X_scaled = np.vstack(X_list)
+        del X_list  # Free memory
+        gc.collect()
 
     # Train-test split (you might want to stratify to preserve class proportions)
+    log_step("Performing train-test split")
     X_train, X_test, y_train, y_test, indices_train, indices_test = train_test_split(
         X_scaled, y, np.arange(len(y)), test_size=0.2, random_state=42, stratify=y
     )
     
+    # Free memory after splitting
+    del X_scaled
+    gc.collect()
+    
     # Create a deep copy of the models dictionary to prevent modifying the original
     models_copy = {
-        'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
-        'Logistic Regression': LogisticRegression(max_iter=1000, random_state=42),
-        'Support Vector Machine (RBF Kernel)': SVC(kernel='rbf', probability=True, random_state=42),
+        'Random Forest': None,  # Will be initialized with optimized parameters
+        'Logistic Regression': None,
+        'Support Vector Machine (RBF Kernel)': None,
     }
     
     local_results = {}
@@ -150,17 +333,19 @@ def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value
     # Map to store prediction details for each model
     prediction_details_by_model = {}
     
-    for model_name, model_template in models_copy.items():
+    for model_name in models_copy.keys():
         log_step(f"Starting evaluation for model: {model_name}.")
         
-        # Make sure we have a valid model instance
-        if model_template is None:
-            log_step(f"Error: Model {model_name} is not available. Skipping.")
+        # Get memory-optimized model for this dataset
+        model = get_memory_optimized_model(model_name, n_features, n_samples)
+        
+        if model is None:
+            log_step(f"Error: Model {model_name} is not available or could not be optimized. Skipping.")
             continue
             
         # Create a fresh instance for each evaluation
         try:
-            model = model_template.__class__(**model_template.get_params())
+            log_step(f"Training and evaluating {model_name}")
             metrics, prediction_details = evaluate_model(model, X_train, X_test, y_train, y_test, cv=cv_folds)
             
             # Store prediction details for this model
@@ -211,10 +396,17 @@ def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value
                 
                 # Force cleanup - Only clear the local reference, not the template
                 model = None
-                import gc
                 gc.collect()
+                
+            # Log memory usage after each model
+            memory_usage = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+            log_step(f"Memory usage after {model_name}: {memory_usage:.2f} MB")
+            
         except Exception as e:
             log_step(f"Error evaluating model {model_name}: {str(e)}")
+            # Print full traceback for debugging
+            import traceback
+            log_step(traceback.format_exc())
             continue
 
     return X_train, X_test, y_train, y_test, local_results

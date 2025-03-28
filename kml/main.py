@@ -101,8 +101,9 @@ Examples:
     parser.add_argument('--ctr', action='store_true', help="If true, run kmertools kml counting subprocess")
     # Add new flag --pca
     parser.add_argument('--pca', action='store_true', help="Apply PCA dimensionality reduction to all vectorization methods")
-    # Add optional argument for number of PCA components
-    parser.add_argument('--pca-components', type=int, default=10, help="Number of PCA components to use (default: 50)")
+    # Update the pca-components argument with clearer description and sentinel value
+    parser.add_argument('--pca-components', type=int, default=-1, 
+                       help="Number of PCA components to use (default: -1 = auto-calculate as 90%% of features)")
     args = parser.parse_args()
 
     # Added execution condition: require either --ctr OR (--models/(--models-all) and --vectorization/(--vectorization-all))
