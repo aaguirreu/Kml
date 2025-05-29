@@ -4,6 +4,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
+from xgboost import XGBClassifier
 import polars as pl
 import numpy as np
 from .logging import log_step
@@ -17,6 +18,7 @@ models = {
     'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
     'Logistic Regression': LogisticRegression(max_iter=1000, random_state=42),
     'Support Vector Machine (RBF Kernel)': SVC(kernel='rbf', probability=True, random_state=42),
+    'XGBoost': XGBClassifier(eval_metric='mlogloss', random_state=42),  # Removed use_label_encoder
 }
 
 # Function to check memory and adjust model parameters
@@ -146,21 +148,30 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):  # 
     cv_start_time = time.time()
     
     try:
-        # Average of Balanced Accuracy in CV - use limited parallelism for large datasets
+        # Average and std of Balanced Accuracy in CV
         n_jobs = 1 if X_train.shape[1] > 20000 else -1
         log_step(f"Running cross-validation with {cv} folds and n_jobs={n_jobs}")
-        bacc_cv = cross_val_score(model, X_train, y_train, scoring=bacc_scorer, cv=cv, n_jobs=n_jobs).mean()
-        # Average of MCC in CV
-        mcc_cv  = cross_val_score(model, X_train, y_train, scoring=mcc_scorer, cv=cv, n_jobs=n_jobs).mean()
+        bacc_cv_scores = cross_val_score(model, X_train, y_train, scoring=bacc_scorer, cv=cv, n_jobs=n_jobs)
+        bacc_cv = bacc_cv_scores.mean()
+        bacc_cv_std = bacc_cv_scores.std()
+        # Average and std of MCC in CV
+        mcc_cv_scores = cross_val_score(model, X_train, y_train, scoring=mcc_scorer, cv=cv, n_jobs=n_jobs)
+        mcc_cv = mcc_cv_scores.mean()
+        mcc_cv_std = mcc_cv_scores.std()
     except MemoryError:
         log_step("Memory error during cross-validation. Using reduced CV.")
-        # Fall back to reduced CV with 3 folds and serial processing
-        bacc_cv = cross_val_score(model, X_train, y_train, scoring=bacc_scorer, cv=3, n_jobs=1).mean()
-        mcc_cv  = cross_val_score(model, X_train, y_train, scoring=mcc_scorer, cv=3, n_jobs=1).mean()
+        bacc_cv_scores = cross_val_score(model, X_train, y_train, scoring=bacc_scorer, cv=3, n_jobs=1)
+        bacc_cv = bacc_cv_scores.mean()
+        bacc_cv_std = bacc_cv_scores.std()
+        mcc_cv_scores = cross_val_score(model, X_train, y_train, scoring=mcc_scorer, cv=3, n_jobs=1)
+        mcc_cv = mcc_cv_scores.mean()
+        mcc_cv_std = mcc_cv_scores.std()
     except Exception as e:
         log_step(f"Error during cross-validation: {str(e)}")
         bacc_cv = 0
+        bacc_cv_std = 0
         mcc_cv = 0
+        mcc_cv_std = 0
         
     cv_time = time.time() - cv_start_time
     log_step(f"Cross-validation completed in {cv_time:.2f} seconds")
@@ -242,7 +253,9 @@ def evaluate_model(model, X_train, X_test, y_train, y_test, auc=True, cv=5):  # 
     metrics = {
         # -- CV Metrics --
         'BACC_CV': bacc_cv,
+        'BACC_CV_STD': bacc_cv_std,
         'MCC_CV': mcc_cv,
+        'MCC_CV_STD': mcc_cv_std,
         'CV Time': cv_time,  # Add CV time to results
 
         # -- Test Metrics --
@@ -324,6 +337,7 @@ def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value
         'Random Forest': None,  # Will be initialized with optimized parameters
         'Logistic Regression': None,
         'Support Vector Machine (RBF Kernel)': None,
+        'XGBoost': None,
     }
     
     local_results = {}
@@ -342,11 +356,31 @@ def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value
         if model is None:
             log_step(f"Error: Model {model_name} is not available or could not be optimized. Skipping.")
             continue
-            
-        # Create a fresh instance for each evaluation
+
         try:
-            log_step(f"Training and evaluating {model_name}")
-            metrics, prediction_details = evaluate_model(model, X_train, X_test, y_train, y_test, cv=cv_folds)
+            # Para XGBoost: necesitamos codificar las etiquetas numéricamente
+            if model_name == 'XGBoost':
+                log_step("XGBoost requires numerical labels. Encoding labels.")
+                # Crear un LabelEncoder para XGBoost
+                label_encoder = LabelEncoder()
+                y_train_encoded = label_encoder.fit_transform(y_train)
+                y_test_encoded = label_encoder.transform(y_test)
+                
+                # Crear un mapeo para recuperar las etiquetas originales después
+                class_mapping = {i: label for i, label in enumerate(label_encoder.classes_)}
+                log_step(f"Encoded {len(class_mapping)} unique classes for XGBoost")
+                
+                # Evaluar XGBoost con etiquetas codificadas
+                log_step(f"Training and evaluating {model_name}")
+                metrics, prediction_details = evaluate_model(model, X_train, X_test, y_train_encoded, y_test_encoded, cv=cv_folds)
+                
+                # Convertir las predicciones numéricas a las etiquetas originales
+                prediction_details['true_labels'] = np.array([class_mapping[label] for label in prediction_details['true_labels']])
+                prediction_details['predicted_labels'] = np.array([class_mapping[label] for label in prediction_details['predicted_labels']])
+            else:
+                # Para los demás modelos, usar etiquetas originales
+                log_step(f"Training and evaluating {model_name}")
+                metrics, prediction_details = evaluate_model(model, X_train, X_test, y_train, y_test, cv=cv_folds)
             
             # Store prediction details for this model
             prediction_details_by_model[model_name] = prediction_details
@@ -397,7 +431,7 @@ def run_models(df, cv_folds=3, output_dir=None, vectorization_name=None, k_value
                 # Force cleanup - Only clear the local reference, not the template
                 model = None
                 gc.collect()
-                
+            
             # Log memory usage after each model
             memory_usage = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
             log_step(f"Memory usage after {model_name}: {memory_usage:.2f} MB")
