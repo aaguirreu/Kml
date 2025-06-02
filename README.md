@@ -99,9 +99,9 @@ The project is implemented in Python and leverages several key libraries:
 ## Contributors
 
 - **Alvaro Aguirre Ulloa** – Escuela de Informática, Facultad de Ingeniería, Universidad Tecnológica Metropolitana, Santiago, Chile
-- **Pedro Sepúlveda** – FCV, USS, Santiago, Chile
+- **Jorge R. Vergara** – Departamento de Informática y Computación, Facultad de Ingeniería, Universidad Tecnológica Metropolitana de Chile, Santiago, Chile 
 - **Diego Fuentealba** – Departamento de Informática y Computación, Facultad de Ingeniería, Universidad Tecnológica Metropolitana de Chile, Santiago, Chile
-- **Raquel Quatrini** – FCV, USS, Santiago, Chile
+- **Raquel Quatrini** – Centro Científico y Tecnológico de Excelencia Ciencia & Vida, Santiago 8580704, Chile. Facultad de Ciencias, Universidad San Sebastián, Santiago 7510602, Chile 
 - **Ana Moya-Beltrán** – Departamento de Informática y Computación, Facultad de Ingeniería, Universidad Tecnológica Metropolitana de Chile, Santiago, Chile 
 
 ## References
